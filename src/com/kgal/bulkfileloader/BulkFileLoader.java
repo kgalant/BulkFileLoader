@@ -123,7 +123,7 @@ public class BulkFileLoader {
 		// create job
 
 		startTiming();
-		
+
 		JobInfo myJob = createJob(bulkConnection);
 
 		// create batches from directory
@@ -141,7 +141,7 @@ public class BulkFileLoader {
 		// check results
 
 		checkResults(bulkConnection, myJob, batchInfos);
-		
+
 		endTiming();
 
 	}
@@ -193,9 +193,10 @@ public class BulkFileLoader {
 				BatchInfo batchInfo = null;
 				totalFiles += numFiles;
 				try {
-//					bulkConnection.getConfig().setRestEndpoint("https://putsreq.com/2lFqaFfufYkXZngKZefU");
-					batchInfo = bulkConnection.createBatchFromDir(myJob, null, tempFolder);
+					//					bulkConnection.getConfig().setRestEndpoint("https://putsreq.com/2lFqaFfufYkXZngKZefU");
+					//					batchInfo = bulkConnection.createBatchFromDir(myJob, null, tempFolder);
 //					batchInfo = createBatchFromFiles(myJob, Paths.get(tempFolder.toURI()), Paths.get(requestFilename));
+					batchInfo = createBatchFromZippedDirectory(myJob,Paths.get(tempFolder.toURI()));
 					//System.out.println(batchInfo);
 					batchInfos.add(batchInfo);
 					batchMap.put("" + tempFolderCounter, batchInfo);
@@ -213,7 +214,7 @@ public class BulkFileLoader {
 				}
 
 				log("Total files tried so far: " + totalFiles + " uploaded: " + totalFilesSent, Loglevel.NORMAL);
-				
+
 				// now reinitialize everything for next batch
 
 				numFiles = 0;
@@ -250,7 +251,7 @@ public class BulkFileLoader {
 				//								"#" + targetFile.getAbsolutePath(); 	// Body
 				requesttxt.add(requestLine);
 				bytesLeft -= (requestLine.length() + 2);	
-//				log("Batch: " + tempFolderCounter + " adding file: " + targetFile.getName(), Loglevel.NORMAL);
+				//				log("Batch: " + tempFolderCounter + " adding file: " + targetFile.getName(), Loglevel.NORMAL);
 			}
 		}
 
@@ -265,9 +266,10 @@ public class BulkFileLoader {
 			BatchInfo batchInfo = null;
 			totalFiles += numFiles;
 			try {
-				batchInfo = bulkConnection.createBatchFromDir(myJob, null, tempFolder);
+				//				batchInfo = bulkConnection.createBatchFromDir(myJob, null, tempFolder);
 //				batchInfo = createBatchFromFiles(myJob, Paths.get(tempFolder.toURI()), Paths.get(requestFilename));
-//				System.out.println(batchInfo);
+				batchInfo = createBatchFromZippedDirectory(myJob,Paths.get(tempFolder.toURI()));
+				//				System.out.println(batchInfo);
 				batchInfos.add(batchInfo);
 				batchMap.put("" + tempFolderCounter, batchInfo);
 				log("Uploaded batch: " + tempFolderCounter + ", total files: " + numFiles + " batch ID: " +
@@ -275,54 +277,62 @@ public class BulkFileLoader {
 				totalFilesSent += numFiles;
 			} catch (AsyncApiException e) {
 				log(e.getMessage(), Loglevel.BRIEF);
-				
+
 				// rename tempfolder
 				tempFolder.renameTo(new File(tempFolder.getAbsolutePath() + "_failed"));
 			}
 			log("Total files tried so far: " + totalFiles + " uploaded: " + totalFilesSent, Loglevel.NORMAL);
 		}
-		
+
 		// now repackage anything that failed into batches, try to reprocess
-		
+
 		if (!failedBatchFolderNames.isEmpty() && !failsReprocessed) {
 			failsReprocessed = true;
 			// create new failed batch folder
-			
+
 			File failedFolder = new File(tmpFolder + File.separator + "FailedFiles");
 			FileUtils.deleteDirectory(failedFolder);
 			failedFolder.mkdirs();
-			
+
 			// copy all files into new failed folder
-			
+
 			for (String folderName : failedBatchFolderNames) {
 				log("Reprocessing folder: " + folderName, Loglevel.NORMAL);
 				for (File f : new File(folderName).listFiles()) {
 					FileUtils.copyFileToDirectory(f, failedFolder);
 				}
 			}
-			
+
 			// reprocess fails folder
-			
+
 			batchInfos.addAll(createBatchesFromDirectory(myJob, failedFolder.getAbsolutePath(), "Failed_", true, 20));
-			
+
 		}
 
 		return batchInfos;
 	}
+	
+	private BatchInfo createBatchFromZippedDirectory(JobInfo job, Path fileDir)
+            throws AsyncApiException, IOException
+    {
+		String zipTarget = fileDir.toString() + File.separator + "batch.zip";
+		Utils.zipIt(zipTarget, fileDir.toString());
+		return bulkConnection.createBatchFromZipStream(job, Files.newInputStream(Paths.get(zipTarget)));
+    }
 
-		private BatchInfo createBatchFromFiles(JobInfo job, Path fileDir, Path newCsv)
-	            throws AsyncApiException, IOException
-	    {
-	
-	        Map<String, InputStream> attachments = new HashMap<>();
-	        for (File f : fileDir.toFile().listFiles())
-	        {
-	            Path filePath = Paths.get(f.toURI());
-	            attachments.put(f.getAbsolutePath(), Files.newInputStream(filePath));
-	        }
-	
-	        return bulkConnection.createBatchWithInputStreamAttachments(job, Files.newInputStream(newCsv), attachments);
-	    }
+	private BatchInfo createBatchFromFiles(JobInfo job, Path fileDir, Path newCsv)
+			throws AsyncApiException, IOException
+	{
+
+		Map<String, InputStream> attachments = new HashMap<>();
+		for (File f : fileDir.toFile().listFiles())
+		{
+			Path filePath = Paths.get(f.toURI());
+			attachments.put(f.getName(), Files.newInputStream(filePath));
+		}
+
+		return bulkConnection.createBatchWithInputStreamAttachments(job, Files.newInputStream(newCsv), attachments);
+	}
 
 	/**
 	 * Create a new job using the Bulk API - will always upload ContentVersion
@@ -381,7 +391,7 @@ public class BulkFileLoader {
 				if (b.getState() == BatchStateEnum.Completed
 						|| b.getState() == BatchStateEnum.Failed) {
 					if (incomplete.remove(b.getId())) {
-//						System.out.println("BATCH STATUS:\n" + b);
+						//						System.out.println("BATCH STATUS:\n" + b);
 						log("Batch: " + b.getId() + " Successes: " + (b.getNumberRecordsProcessed() - b.getNumberRecordsFailed()) + 
 								" Fails: " + b.getNumberRecordsFailed() + " API time: " + b.getApiActiveProcessingTime(), Loglevel.NORMAL);
 					}
@@ -395,7 +405,7 @@ public class BulkFileLoader {
 	 */
 	private void checkResults(BulkConnection connection, JobInfo job, ArrayList<BatchInfo> batchInfoList) throws AsyncApiException, IOException {
 		// batchInfoList was populated when batches were created and submitted
-		
+
 		int totalSuccesses = 0;
 		int totalFails = 0;
 		for (BatchInfo b : batchInfoList) {
@@ -416,7 +426,7 @@ public class BulkFileLoader {
 				String id = resultInfo.get("Id");
 				String error = resultInfo.get("Error");
 				if (success && created) {
-//					System.out.println("Created row with id " + id);
+					//					System.out.println("Created row with id " + id);
 					successes++;
 				} else if (!success) {
 					System.out.println("Failed with error: " + error);
@@ -426,7 +436,7 @@ public class BulkFileLoader {
 			log("Batch: " + b.getId() + " Successes: " + successes + " Fails: " + fails + " API time: " + b.getApiActiveProcessingTime(), Loglevel.NORMAL);
 			totalSuccesses += successes;
 			totalFails += fails;
-			
+
 		}
 		log("Total successes: " + totalSuccesses + " Fails: " + totalFails, Loglevel.NORMAL);
 	}
