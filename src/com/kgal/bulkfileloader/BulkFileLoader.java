@@ -19,7 +19,7 @@ import org.apache.commons.io.FileUtils;
 
 import com.kgal.SFLogin.LoginUtil;
 import com.kgal.bulkfileloader.BulkFileLoaderCommandLine;
-import com.salesforce.migrationtoolutils.Utils;
+import com.kgal.bulkfileloader.Utils;
 import com.sforce.async.AsyncApiException;
 import com.sforce.async.BulkConnection;
 import com.sforce.async.CSVReader;
@@ -72,19 +72,20 @@ public class BulkFileLoader {
 
 	}
 
-	private void startTiming() {
-		this.timeStart = System.currentTimeMillis();
+	private long startTiming() {
+		return System.currentTimeMillis();
 	}
 
-	private void endTiming() {
+	private void endTiming(long startTime, String message) {
 		final long end = System.currentTimeMillis();
-		final long diff = ((end - this.timeStart));
+		final long diff = ((end - startTime));
 		final String hms = String.format("%02d:%02d:%02d", TimeUnit.MILLISECONDS.toHours(diff),
 				TimeUnit.MILLISECONDS.toMinutes(diff) - TimeUnit.HOURS.toMinutes(TimeUnit.MILLISECONDS.toHours(diff)),
 				TimeUnit.MILLISECONDS.toSeconds(diff)
 				- TimeUnit.MINUTES.toSeconds(TimeUnit.MILLISECONDS.toMinutes(diff)));
-		this.log("Duration: " + hms, Loglevel.NORMAL);
+		this.log(message + " duration: " + hms, Loglevel.NORMAL);
 	}
+	
 	private void log(final String logText, final Loglevel level) {
 		if ((this.loglevel == null) || (level.getLevel() <= this.loglevel.getLevel())) {
 			System.out.println(logText);
@@ -122,7 +123,7 @@ public class BulkFileLoader {
 
 		// create job
 
-		startTiming();
+		long startTime = startTiming();
 
 		JobInfo myJob = createJob(bulkConnection);
 
@@ -142,7 +143,7 @@ public class BulkFileLoader {
 
 		checkResults(bulkConnection, myJob, batchInfos);
 
-		endTiming();
+		endTiming(startTime, "Overall operation");
 
 	}
 
@@ -194,9 +195,11 @@ public class BulkFileLoader {
 				totalFiles += numFiles;
 				try {
 					//					bulkConnection.getConfig().setRestEndpoint("https://putsreq.com/2lFqaFfufYkXZngKZefU");
-					//					batchInfo = bulkConnection.createBatchFromDir(myJob, null, tempFolder);
+					long startTime = startTiming();
+					batchInfo = bulkConnection.createBatchFromDir(myJob, null, tempFolder);
+					endTiming(startTime, "Upload");
 //					batchInfo = createBatchFromFiles(myJob, Paths.get(tempFolder.toURI()), Paths.get(requestFilename));
-					batchInfo = createBatchFromZippedDirectory(myJob,Paths.get(tempFolder.toURI()));
+//					batchInfo = createBatchFromZippedDirectory(myJob,Paths.get(tempFolder.toURI()), tempFolderCounter);
 					//System.out.println(batchInfo);
 					batchInfos.add(batchInfo);
 					batchMap.put("" + tempFolderCounter, batchInfo);
@@ -228,7 +231,7 @@ public class BulkFileLoader {
 				log("Created batch folder: " + tempFolder.getName(), Loglevel.NORMAL);
 
 			} else {
-				if (!f.isFile()) {
+				if (!f.isFile()) { 
 					continue;
 				}
 				// move this file into the temp directory
@@ -240,9 +243,9 @@ public class BulkFileLoader {
 				bytesLeft -= targetFile.length();
 				// add to requesttxt
 				String requestLine = 
-						targetFile.getName() + "," + 			// Title
-								targetFile.getName() + "," + 			// Description
-								"#" + targetFile.getName() + "," + 			// VersionData
+						targetFile.getName().trim() + "," + 			// Title
+								targetFile.getName().trim() + "," + 			// Description
+								"#" + targetFile.getName().trim() + "," + 			// VersionData
 								//								"#" + targetFile.getAbsolutePath() + "," + 	// VersionData
 								targetFile.getAbsolutePath();			// PathOnClient
 				//				String requestLine = 
@@ -266,9 +269,11 @@ public class BulkFileLoader {
 			BatchInfo batchInfo = null;
 			totalFiles += numFiles;
 			try {
-				//				batchInfo = bulkConnection.createBatchFromDir(myJob, null, tempFolder);
+				long startTime = startTiming();
+				batchInfo = bulkConnection.createBatchFromDir(myJob, null, tempFolder);
+				endTiming(startTime, "Upload");
 //				batchInfo = createBatchFromFiles(myJob, Paths.get(tempFolder.toURI()), Paths.get(requestFilename));
-				batchInfo = createBatchFromZippedDirectory(myJob,Paths.get(tempFolder.toURI()));
+//				batchInfo = createBatchFromZippedDirectory(myJob,Paths.get(tempFolder.toURI()), tempFolderCounter);
 				//				System.out.println(batchInfo);
 				batchInfos.add(batchInfo);
 				batchMap.put("" + tempFolderCounter, batchInfo);
@@ -312,12 +317,30 @@ public class BulkFileLoader {
 		return batchInfos;
 	}
 	
-	private BatchInfo createBatchFromZippedDirectory(JobInfo job, Path fileDir)
+	private BatchInfo createBatchFromZippedDirectory(JobInfo job, Path fileDir, int batchNumber)
             throws AsyncApiException, IOException
     {
-		String zipTarget = fileDir.toString() + File.separator + "batch.zip";
+		String zipTarget = fileDir.getParent().toString() + File.separator + "batch_" + batchNumber + ".zip";
+		long startTime = startTiming();
 		Utils.zipIt(zipTarget, fileDir.toString());
-		return bulkConnection.createBatchFromZipStream(job, Files.newInputStream(Paths.get(zipTarget)));
+		endTiming(startTime, "Zip time");
+		startTime = startTiming();
+		BatchInfo b = bulkConnection.createBatchFromZipStream(job, Files.newInputStream(Paths.get(zipTarget)));
+		endTiming(startTime, "Upload time");
+		return b;
+    }
+	
+	private BatchInfo createBatchFromDirectory(JobInfo job, Path fileDir, int batchNumber)
+            throws AsyncApiException, IOException
+    {
+		String zipTarget = fileDir.getParent().toString() + File.separator + "batch_" + batchNumber + ".zip";
+		long startTime = startTiming();
+		Utils.zipIt(zipTarget, fileDir.toString());
+		endTiming(startTime, "Zip time");
+		startTime = startTiming();
+		BatchInfo b = bulkConnection.createBatchFromStream(job, Files.newInputStream(Paths.get(zipTarget)));
+		endTiming(startTime, "Upload time");
+		return b;
     }
 
 	private BatchInfo createBatchFromFiles(JobInfo job, Path fileDir, Path newCsv)
@@ -440,4 +463,6 @@ public class BulkFileLoader {
 		}
 		log("Total successes: " + totalSuccesses + " Fails: " + totalFails, Loglevel.NORMAL);
 	}
+	
+	
 }
