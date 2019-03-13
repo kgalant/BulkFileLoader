@@ -1,6 +1,7 @@
 package com.kgal.bulkfileloader;
 
 import java.io.File;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.Files;
@@ -14,6 +15,8 @@ import java.util.HashSet;
 import java.util.Iterator;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipOutputStream;
 
 import org.apache.commons.io.FileUtils;
 
@@ -53,6 +56,8 @@ public class BulkFileLoader {
 	private double                                  myApiVersion;
 
 	public static final int     MAXREQUESTSIZE      = 20920000;
+	public static final int     MAXZIPPEDBATCHSIZE      = 10000000;
+	public static final double     BACKOFFFACTOR      = 0.66;
 	public static final double   API_VERSION            = 45.0;
 	private static final String  URLBASE                = "/services/Soap/u/";
 	private static final String  BATCHFOLDERPREFIX		= "Batch_";
@@ -65,6 +70,14 @@ public class BulkFileLoader {
 	private String srcFolder;
 	private String tmpFolder;
 	private boolean failsReprocessed = false;
+	private Integer tempFolderCounter = 1;
+	private Integer tooBigFolderCounter = 1;
+	private int totalFiles = 0;
+	private int totalFilesSent = 0;
+	private double averageCompressionRatio = 0.75;
+	private double compressedSize = 0;
+	private double uncompressedSize = 0;
+	private File failedFolder;
 
 
 	public static void main(String[] args) {
@@ -85,7 +98,7 @@ public class BulkFileLoader {
 				- TimeUnit.MINUTES.toSeconds(TimeUnit.MILLISECONDS.toMinutes(diff)));
 		this.log(message + " duration: " + hms, Loglevel.NORMAL);
 	}
-	
+
 	private void log(final String logText, final Loglevel level) {
 		if ((this.loglevel == null) || (level.getLevel() <= this.loglevel.getLevel())) {
 			System.out.println(logText);
@@ -126,10 +139,14 @@ public class BulkFileLoader {
 		long startTime = startTiming();
 
 		JobInfo myJob = createJob(bulkConnection);
+		
+		// do starting setup
+		
+		setupBasicStuff();
 
 		// create batches from directory
 
-		ArrayList<BatchInfo> batchInfos = createBatchesFromDirectory(myJob, srcFolder, BATCHFOLDERPREFIX, false, 999);
+		ArrayList<BatchInfo> batchInfos = createBatchesFromDirectory(myJob, srcFolder, BATCHFOLDERPREFIX, false, 999, maxRequestSize);
 
 		// close job
 
@@ -144,10 +161,27 @@ public class BulkFileLoader {
 		checkResults(bulkConnection, myJob, batchInfos);
 
 		endTiming(startTime, "Overall operation");
+		log("Number of batches too big:" + tooBigFolderCounter, Loglevel.NORMAL);
+		log("Uncompressed size:" + uncompressedSize/1024/1024 + " Mb", Loglevel.NORMAL);
+		log("Overall compression ratio:" + String.format("%.2f", getCompressionRatio()), Loglevel.NORMAL);
+		log("Rate:" + String.format("%.2f", uncompressedSize/1024/1024/((System.currentTimeMillis()-startTime)/1000)) + "Mb/s", Loglevel.NORMAL);
 
 	}
 
-	private ArrayList<BatchInfo> createBatchesFromDirectory(JobInfo myJob, String sourceDirectory, String batchPrefix, boolean moveFiles, int maxNumberOfFilesInBatch) throws IOException {
+	private void setupBasicStuff() throws IOException {
+		
+		//clean out tempfolder
+		
+		FileUtils.deleteDirectory(new File(tmpFolder));
+		
+		failedFolder = new File(tmpFolder + File.separator + "FailedFiles");
+		if (!failedFolder.exists()) {
+			failedFolder.mkdirs();
+		}
+		
+	}
+
+	private ArrayList<BatchInfo> createBatchesFromDirectory(JobInfo myJob, String sourceDirectory, String batchPrefix, boolean moveFiles, int maxNumberOfFilesInBatch, int currentMaxRequestSize) throws IOException {
 		//// open directory
 		//// iterate over files until we hit capacity limit, build request.txt as we go
 
@@ -155,20 +189,19 @@ public class BulkFileLoader {
 		ArrayList<File> myFiles = new ArrayList<File>(Arrays.asList(myDirectory.listFiles()));
 		ArrayList<BatchInfo> batchInfos = new ArrayList<BatchInfo>();
 		ArrayList<String> failedBatchFolderNames = new ArrayList<String>();
-
+	
 		Iterator<File> i = myFiles.iterator();
 		File tempFolder = null;
-		Integer tempFolderCounter = 1;
 		Integer numFiles = 0;
-		int totalFiles = 0;
-		int totalFilesSent = 0;
+		
+		
 
 		// initialize first temp folder, variables
 		final String headerRow = "Title,Description,VersionData,PathOnClient";
 
 		// reinitialize temp folder, variables
 		numFiles = 0;
-		int bytesLeft = maxRequestSize;
+		int bytesLeft = currentMaxRequestSize;
 
 		ArrayList<String> requesttxt = new ArrayList<String>();
 		requesttxt.add(headerRow);
@@ -178,14 +211,16 @@ public class BulkFileLoader {
 		tempFolder.mkdirs();
 		log("Created batch folder: " + tempFolder.getAbsolutePath(), Loglevel.NORMAL);
 
-
 		while (i.hasNext()) {
 			File f = i.next();
 
-			if (f.length() > maxRequestSize) {
+			if (f.length() > currentMaxRequestSize || f.length() == 0) {
 				// file too big altogether, stop processing
+				File failedFile = new File(failedFolder.toString() + File.separator + f.getName());
+				f.renameTo(failedFile);
+				log("File " + f.getAbsolutePath() + " is too big or has size 0, cannot continue. Moving to failed: " + failedFile.getAbsolutePath(), Loglevel.BRIEF);
 				continue;
-			} else if (f.length() > bytesLeft || numFiles > maxNumberOfFilesInBatch){
+			} else if (f.length() * getCompressionRatio() > bytesLeft || numFiles > maxNumberOfFilesInBatch){
 				// finish processing this batch
 				// write request.txt into temp folder
 				String requestFilename = tempFolder + File.separator + "request.txt";	
@@ -194,17 +229,28 @@ public class BulkFileLoader {
 				BatchInfo batchInfo = null;
 				totalFiles += numFiles;
 				try {
-					//					bulkConnection.getConfig().setRestEndpoint("https://putsreq.com/2lFqaFfufYkXZngKZefU");
 					long startTime = startTiming();
-					batchInfo = bulkConnection.createBatchFromDir(myJob, null, tempFolder);
-					endTiming(startTime, "Upload");
-//					batchInfo = createBatchFromFiles(myJob, Paths.get(tempFolder.toURI()), Paths.get(requestFilename));
-//					batchInfo = createBatchFromZippedDirectory(myJob,Paths.get(tempFolder.toURI()), tempFolderCounter);
-					//System.out.println(batchInfo);
-					batchInfos.add(batchInfo);
-					batchMap.put("" + tempFolderCounter, batchInfo);
-					log("Uploaded batch: " + tempFolderCounter + ", total files: " + numFiles + " batch ID: " +
-							batchInfo.getId() + " size: " + (maxRequestSize - bytesLeft), Loglevel.NORMAL);
+					batchInfo = createBatchFromZippedDirectory(myJob,Paths.get(tempFolder.toURI()), batchPrefix, tempFolderCounter, currentMaxRequestSize);
+					if (batchInfo != null) {
+						batchMap.put("" + tempFolderCounter, batchInfo);
+						batchInfos.add(batchInfo);
+						uncompressedSize += (currentMaxRequestSize - bytesLeft);
+						log("Compression ratio now: " + getCompressionRatio(), Loglevel.BRIEF);
+						log("Total files tried so far: " + totalFiles + " uploaded: " + totalFilesSent, Loglevel.NORMAL);
+					} else {
+						// zipped file too big, need to split it up
+						
+						// first rename the current temp folder to a different filename
+						File renamedFolder = new File(tmpFolder + File.separator + "toobig_" + tooBigFolderCounter++);
+						tempFolder.renameTo(renamedFolder);
+						
+						// try to run the same thing with a smaller max source file size
+						batchInfos.addAll(createBatchesFromDirectory(myJob, renamedFolder.toString(), batchPrefix, moveFiles, maxNumberOfFilesInBatch, (int) (currentMaxRequestSize * BACKOFFFACTOR)));
+						
+						// assume that we ultimately got all the files into a batch or dumped into error folder
+						FileUtils.deleteDirectory(renamedFolder);
+					}
+
 					totalFilesSent += numFiles;
 				} catch (AsyncApiException e) {
 					log("Tried to upload batch of size: " + (maxRequestSize - bytesLeft) + " files: " + numFiles + "but failed.", Loglevel.NORMAL);
@@ -215,8 +261,6 @@ public class BulkFileLoader {
 					tempFolder.renameTo(new File(tempFolder.getAbsolutePath() + "_failed"));
 					failedBatchFolderNames.add(tempFolder.getAbsolutePath() + "_failed");
 				}
-
-				log("Total files tried so far: " + totalFiles + " uploaded: " + totalFilesSent, Loglevel.NORMAL);
 
 				// now reinitialize everything for next batch
 
@@ -246,12 +290,7 @@ public class BulkFileLoader {
 						targetFile.getName().trim() + "," + 			// Title
 								targetFile.getName().trim() + "," + 			// Description
 								"#" + targetFile.getName().trim() + "," + 			// VersionData
-								//								"#" + targetFile.getAbsolutePath() + "," + 	// VersionData
 								targetFile.getAbsolutePath();			// PathOnClient
-				//				String requestLine = 
-				//						targetFile.getName() + "," + 			// Name
-				//								"0060X00000a44NpQAI" + "," + 			// parentID
-				//								"#" + targetFile.getAbsolutePath(); 	// Body
 				requesttxt.add(requestLine);
 				bytesLeft -= (requestLine.length() + 2);	
 				//				log("Batch: " + tempFolderCounter + " adding file: " + targetFile.getName(), Loglevel.NORMAL);
@@ -270,15 +309,13 @@ public class BulkFileLoader {
 			totalFiles += numFiles;
 			try {
 				long startTime = startTiming();
-				batchInfo = bulkConnection.createBatchFromDir(myJob, null, tempFolder);
+				//				batchInfo = bulkConnection.createBatchFromDir(myJob, null, tempFolder);
 				endTiming(startTime, "Upload");
-//				batchInfo = createBatchFromFiles(myJob, Paths.get(tempFolder.toURI()), Paths.get(requestFilename));
-//				batchInfo = createBatchFromZippedDirectory(myJob,Paths.get(tempFolder.toURI()), tempFolderCounter);
+				//				batchInfo = createBatchFromFiles(myJob, Paths.get(tempFolder.toURI()), Paths.get(requestFilename));
+				batchInfo = createBatchFromZippedDirectory(myJob,Paths.get(tempFolder.toURI()), batchPrefix, tempFolderCounter, currentMaxRequestSize);
 				//				System.out.println(batchInfo);
 				batchInfos.add(batchInfo);
 				batchMap.put("" + tempFolderCounter, batchInfo);
-				log("Uploaded batch: " + tempFolderCounter + ", total files: " + numFiles + " batch ID: " +
-						batchInfo.getId() + " size: " + (maxRequestSize - bytesLeft), Loglevel.NORMAL);
 				totalFilesSent += numFiles;
 			} catch (AsyncApiException e) {
 				log(e.getMessage(), Loglevel.BRIEF);
@@ -293,11 +330,6 @@ public class BulkFileLoader {
 
 		if (!failedBatchFolderNames.isEmpty() && !failsReprocessed) {
 			failsReprocessed = true;
-			// create new failed batch folder
-
-			File failedFolder = new File(tmpFolder + File.separator + "FailedFiles");
-			FileUtils.deleteDirectory(failedFolder);
-			failedFolder.mkdirs();
 
 			// copy all files into new failed folder
 
@@ -310,29 +342,42 @@ public class BulkFileLoader {
 
 			// reprocess fails folder
 
-			batchInfos.addAll(createBatchesFromDirectory(myJob, failedFolder.getAbsolutePath(), "Failed_", true, 20));
+			batchInfos.addAll(createBatchesFromDirectory(myJob, failedFolder.getAbsolutePath(), "Failed_", true, 20, currentMaxRequestSize));
 
 		}
+		
 
 		return batchInfos;
 	}
-	
-	private BatchInfo createBatchFromZippedDirectory(JobInfo job, Path fileDir, int batchNumber)
-            throws AsyncApiException, IOException
-    {
-		String zipTarget = fileDir.getParent().toString() + File.separator + "batch_" + batchNumber + ".zip";
+
+	private BatchInfo createBatchFromZippedDirectory(JobInfo job, Path fileDir, String batchFilenamePrefix, int batchNumber, int currentMaxSize)
+			throws AsyncApiException, IOException
+	{
+		String zipTarget = fileDir.getParent().toString() + File.separator + batchFilenamePrefix + batchNumber + ".zip";
 		long startTime = startTiming();
 		Utils.zipIt(zipTarget, fileDir.toString());
 		endTiming(startTime, "Zip time");
-		startTime = startTiming();
-		BatchInfo b = bulkConnection.createBatchFromZipStream(job, Files.newInputStream(Paths.get(zipTarget)));
-		endTiming(startTime, "Upload time");
-		return b;
-    }
-	
+
+		// check if the batch zipped is bigger than 10Mb, if so try to split in half and try again
+
+		File zippedBatch = new File(zipTarget);
+		if (zippedBatch.length() > MAXZIPPEDBATCHSIZE) {
+			log("Zipped batch over " + MAXZIPPEDBATCHSIZE + " byte size limit. Must split into smaller chunks.", Loglevel.BRIEF);
+			// remove old zip file
+			zippedBatch.delete();
+			return null;
+		} else {
+			startTime = startTiming();
+			BatchInfo b = bulkConnection.createBatchFromZipStream(job, Files.newInputStream(Paths.get(zipTarget)));
+			endTiming(startTime, "Upload time");
+			compressedSize += new File(zipTarget).length();
+			return b;
+		}
+	}
+
 	private BatchInfo createBatchFromDirectory(JobInfo job, Path fileDir, int batchNumber)
-            throws AsyncApiException, IOException
-    {
+			throws AsyncApiException, IOException
+	{
 		String zipTarget = fileDir.getParent().toString() + File.separator + "batch_" + batchNumber + ".zip";
 		long startTime = startTiming();
 		Utils.zipIt(zipTarget, fileDir.toString());
@@ -341,7 +386,7 @@ public class BulkFileLoader {
 		BatchInfo b = bulkConnection.createBatchFromStream(job, Files.newInputStream(Paths.get(zipTarget)));
 		endTiming(startTime, "Upload time");
 		return b;
-    }
+	}
 
 	private BatchInfo createBatchFromFiles(JobInfo job, Path fileDir, Path newCsv)
 			throws AsyncApiException, IOException
@@ -406,7 +451,7 @@ public class BulkFileLoader {
 			try {
 				Thread.sleep(sleepTime);
 			} catch (InterruptedException e) {}
-			System.out.println("Awaiting results..." + incomplete.size());
+			System.out.println("Awaiting results..." + incomplete.size() + " batches outstanding.");
 			sleepTime = 10000L;
 			BatchInfo[] statusList =
 					connection.getBatchInfoList(job.getId()).getBatchInfo();
@@ -463,6 +508,13 @@ public class BulkFileLoader {
 		}
 		log("Total successes: " + totalSuccesses + " Fails: " + totalFails, Loglevel.NORMAL);
 	}
-	
-	
+
+	private double getCompressionRatio() {
+		if (uncompressedSize == 0.0 || compressedSize == 0.0) {
+			return averageCompressionRatio;
+		} else {
+			return compressedSize/uncompressedSize;
+		}
+	}
+
 }
