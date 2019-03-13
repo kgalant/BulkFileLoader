@@ -161,7 +161,7 @@ public class BulkFileLoader {
 		checkResults(bulkConnection, myJob, batchInfos);
 
 		endTiming(startTime, "Overall operation");
-		log("Number of batches too big:" + tooBigFolderCounter, Loglevel.NORMAL);
+		log("Number of batches too big:" + (tooBigFolderCounter - 1), Loglevel.NORMAL);
 		log("Uncompressed size:" + uncompressedSize/1024/1024 + " Mb", Loglevel.NORMAL);
 		log("Overall compression ratio:" + String.format("%.2f", getCompressionRatio()), Loglevel.NORMAL);
 		log("Rate:" + String.format("%.2f", uncompressedSize/1024/1024/((System.currentTimeMillis()-startTime)/1000)) + "Mb/s", Loglevel.NORMAL);
@@ -317,13 +317,16 @@ public class BulkFileLoader {
 				batchInfos.add(batchInfo);
 				batchMap.put("" + tempFolderCounter, batchInfo);
 				totalFilesSent += numFiles;
+				uncompressedSize += (currentMaxRequestSize - bytesLeft);
+				log("Compression ratio now: " + getCompressionRatio(), Loglevel.BRIEF);
+				log("Total files tried so far: " + totalFiles + " uploaded: " + totalFilesSent, Loglevel.NORMAL);
 			} catch (AsyncApiException e) {
 				log(e.getMessage(), Loglevel.BRIEF);
 
 				// rename tempfolder
 				tempFolder.renameTo(new File(tempFolder.getAbsolutePath() + "_failed"));
 			}
-			log("Total files tried so far: " + totalFiles + " uploaded: " + totalFilesSent, Loglevel.NORMAL);
+
 		}
 
 		// now repackage anything that failed into batches, try to reprocess
