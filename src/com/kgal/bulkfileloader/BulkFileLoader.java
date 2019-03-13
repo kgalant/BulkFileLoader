@@ -225,13 +225,11 @@ public class BulkFileLoader {
 				Utils.writeFile(requestFilename, requesttxt);
 				// now create batch out of temp folder
 				BatchInfo batchInfo = null;
-				totalFiles += numFiles;
 				try {
-					batchInfo = createBatchFromZippedDirectory(myJob,Paths.get(tempFolder.toURI()), batchPrefix, tempFolderCounter, currentMaxRequestSize);
+					batchInfo = createBatchFromZippedDirectory(myJob,Paths.get(tempFolder.toURI()), batchPrefix, tempFolderCounter, currentMaxRequestSize, maxRequestSize - bytesLeft, numFiles);
 					if (batchInfo != null) {
 						batchMap.put("" + tempFolderCounter, batchInfo);
 						batchInfos.add(batchInfo);
-						uncompressedSize += (currentMaxRequestSize - bytesLeft);
 						log("Compression ratio now: " + getCompressionRatio(), Loglevel.BRIEF);
 						log("Total files tried so far: " + totalFiles + " uploaded: " + totalFilesSent, Loglevel.NORMAL);
 					} else {
@@ -247,8 +245,6 @@ public class BulkFileLoader {
 						// assume that we ultimately got all the files into a batch or dumped into error folder
 						FileUtils.deleteDirectory(renamedFolder);
 					}
-
-					totalFilesSent += numFiles;
 				} catch (AsyncApiException e) {
 					log("Tried to upload batch of size: " + (maxRequestSize - bytesLeft) + " files: " + numFiles + "but failed.", Loglevel.NORMAL);
 					log(e.getMessage(), Loglevel.NORMAL);
@@ -303,18 +299,16 @@ public class BulkFileLoader {
 			Utils.writeFile(requestFilename, requesttxt);
 			// now create batch out of temp folder
 			BatchInfo batchInfo = null;
-			totalFiles += numFiles;
 			try {
 				long startTime = startTiming();
 				//				batchInfo = bulkConnection.createBatchFromDir(myJob, null, tempFolder);
 				endTiming(startTime, "Upload");
 				//				batchInfo = createBatchFromFiles(myJob, Paths.get(tempFolder.toURI()), Paths.get(requestFilename));
-				batchInfo = createBatchFromZippedDirectory(myJob,Paths.get(tempFolder.toURI()), batchPrefix, tempFolderCounter, currentMaxRequestSize);
+				batchInfo = createBatchFromZippedDirectory(myJob,Paths.get(tempFolder.toURI()), batchPrefix, tempFolderCounter, currentMaxRequestSize, maxRequestSize - bytesLeft, numFiles);
 				//				System.out.println(batchInfo);
 				batchInfos.add(batchInfo);
 				batchMap.put("" + tempFolderCounter, batchInfo);
-				totalFilesSent += numFiles;
-				uncompressedSize += (currentMaxRequestSize - bytesLeft);
+
 				log("Compression ratio now: " + getCompressionRatio(), Loglevel.BRIEF);
 				log("Total files tried so far: " + totalFiles + " uploaded: " + totalFilesSent, Loglevel.NORMAL);
 			} catch (AsyncApiException e) {
@@ -350,7 +344,7 @@ public class BulkFileLoader {
 		return batchInfos;
 	}
 
-	private BatchInfo createBatchFromZippedDirectory(JobInfo job, Path fileDir, String batchFilenamePrefix, int batchNumber, int currentMaxSize)
+	private BatchInfo createBatchFromZippedDirectory(JobInfo job, Path fileDir, String batchFilenamePrefix, int batchNumber, int currentMaxSize, int dirSize, int numFiles)
 			throws AsyncApiException, IOException
 	{
 		String zipTarget = fileDir.getParent().toString() + File.separator + batchFilenamePrefix + batchNumber + ".zip";
@@ -370,7 +364,10 @@ public class BulkFileLoader {
 			startTime = startTiming();
 			BatchInfo b = bulkConnection.createBatchFromZipStream(job, Files.newInputStream(Paths.get(zipTarget)));
 			endTiming(startTime, "Upload time");
+			totalFiles += numFiles;
+			totalFilesSent += numFiles;
 			compressedSize += new File(zipTarget).length();
+			uncompressedSize += dirSize;
 			return b;
 		}
 	}
@@ -470,6 +467,9 @@ public class BulkFileLoader {
 	private void checkResults(BulkConnection connection, JobInfo job, ArrayList<BatchInfo> batchInfoList) throws AsyncApiException, IOException {
 		// batchInfoList was populated when batches were created and submitted
 
+		log("******************************************************", Loglevel.BRIEF);
+		log("*       Batch Results                          *", Loglevel.BRIEF);
+		log("******************************************************", Loglevel.BRIEF);
 		int totalSuccesses = 0;
 		int totalFails = 0;
 		for (BatchInfo b : batchInfoList) {
