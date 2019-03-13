@@ -1,22 +1,19 @@
 package com.kgal.bulkfileloader;
 
 import java.io.File;
-import java.io.FileOutputStream;
 import java.io.IOException;
-import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.rmi.RemoteException;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
-import java.util.zip.ZipEntry;
-import java.util.zip.ZipOutputStream;
 
 import org.apache.commons.io.FileUtils;
 
@@ -52,7 +49,6 @@ public class BulkFileLoader {
 	};
 
 
-	private long                                    timeStart;
 	private double                                  myApiVersion;
 
 	public static final int     MAXREQUESTSIZE      = 20920000;
@@ -186,7 +182,9 @@ public class BulkFileLoader {
 		//// iterate over files until we hit capacity limit, build request.txt as we go
 
 		File myDirectory = new File(sourceDirectory);
-		ArrayList<File> myFiles = new ArrayList<File>(Arrays.asList(myDirectory.listFiles()));
+//		ArrayList<File> myFiles = new ArrayList<File>(Arrays.asList(myDirectory.listFiles()));
+		Collection<File> myFiles = FileUtils.listFiles(myDirectory, null, true);
+		
 		ArrayList<BatchInfo> batchInfos = new ArrayList<BatchInfo>();
 		ArrayList<String> failedBatchFolderNames = new ArrayList<String>();
 	
@@ -229,7 +227,6 @@ public class BulkFileLoader {
 				BatchInfo batchInfo = null;
 				totalFiles += numFiles;
 				try {
-					long startTime = startTiming();
 					batchInfo = createBatchFromZippedDirectory(myJob,Paths.get(tempFolder.toURI()), batchPrefix, tempFolderCounter, currentMaxRequestSize);
 					if (batchInfo != null) {
 						batchMap.put("" + tempFolderCounter, batchInfo);
@@ -378,32 +375,32 @@ public class BulkFileLoader {
 		}
 	}
 
-	private BatchInfo createBatchFromDirectory(JobInfo job, Path fileDir, int batchNumber)
-			throws AsyncApiException, IOException
-	{
-		String zipTarget = fileDir.getParent().toString() + File.separator + "batch_" + batchNumber + ".zip";
-		long startTime = startTiming();
-		Utils.zipIt(zipTarget, fileDir.toString());
-		endTiming(startTime, "Zip time");
-		startTime = startTiming();
-		BatchInfo b = bulkConnection.createBatchFromStream(job, Files.newInputStream(Paths.get(zipTarget)));
-		endTiming(startTime, "Upload time");
-		return b;
-	}
-
-	private BatchInfo createBatchFromFiles(JobInfo job, Path fileDir, Path newCsv)
-			throws AsyncApiException, IOException
-	{
-
-		Map<String, InputStream> attachments = new HashMap<>();
-		for (File f : fileDir.toFile().listFiles())
-		{
-			Path filePath = Paths.get(f.toURI());
-			attachments.put(f.getName(), Files.newInputStream(filePath));
-		}
-
-		return bulkConnection.createBatchWithInputStreamAttachments(job, Files.newInputStream(newCsv), attachments);
-	}
+//	private BatchInfo createBatchFromDirectory(JobInfo job, Path fileDir, int batchNumber)
+//			throws AsyncApiException, IOException
+//	{
+//		String zipTarget = fileDir.getParent().toString() + File.separator + "batch_" + batchNumber + ".zip";
+//		long startTime = startTiming();
+//		Utils.zipIt(zipTarget, fileDir.toString());
+//		endTiming(startTime, "Zip time");
+//		startTime = startTiming();
+//		BatchInfo b = bulkConnection.createBatchFromStream(job, Files.newInputStream(Paths.get(zipTarget)));
+//		endTiming(startTime, "Upload time");
+//		return b;
+//	}
+//
+//	private BatchInfo createBatchFromFiles(JobInfo job, Path fileDir, Path newCsv)
+//			throws AsyncApiException, IOException
+//	{
+//
+//		Map<String, InputStream> attachments = new HashMap<>();
+//		for (File f : fileDir.toFile().listFiles())
+//		{
+//			Path filePath = Paths.get(f.toURI());
+//			attachments.put(f.getName(), Files.newInputStream(filePath));
+//		}
+//
+//		return bulkConnection.createBatchWithInputStreamAttachments(job, Files.newInputStream(newCsv), attachments);
+//	}
 
 	/**
 	 * Create a new job using the Bulk API - will always upload ContentVersion
@@ -422,11 +419,7 @@ public class BulkFileLoader {
 		//System.out.println(job);
 		return job;
 	}
-
-	private String doubleQuote(String s) {
-		return "\"" + s + "\"";
-	}
-
+	
 	private void closeJob(BulkConnection connection, JobInfo myJob)	throws AsyncApiException {
 		JobInfo job = new JobInfo();
 		job.setId(myJob.getId());
