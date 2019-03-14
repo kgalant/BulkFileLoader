@@ -312,40 +312,9 @@ public class BulkFileLoader {
 				String requestFilename = tempFolder + File.separator + "request.txt";	
 				Utils.writeFile(requestFilename, requesttxt);
 				// now create batch out of temp folder
-				BatchInfo batchInfo = null;
+				
 				try {
-					batchInfo = createBatchFromZippedDirectory(myJob,Paths.get(tempFolder.toURI()), batchPrefix, tempFolderCounter, currentMaxRequestSize);
-					if (batchInfo != null) {
-						batchMap.put("" + tempFolderCounter, batchInfo);
-						batchInfos.add(batchInfo);
-						// update the file inventory items in this batch so they know which batch they're part of
-						for (FileInventoryItem fi : filesInThisBatch) {
-							fi.setBatchId(batchInfo.getId());
-							completeFileList.add(fi);
-						}
-						batchInventoryMapByBatchId.put(batchInfo.getId(), filesInThisBatch);
-					} else {
-						// zipped file too big, need to split it up
-						
-						// remove request.txt file
-						FileUtils.deleteQuietly(new File(tempFolder.getAbsoluteFile() + File.separator + "request.txt"));
-
-						// first rename the current temp folder to a different filename
-						File renamedFolder = new File(tmpFolder + File.separator + "toobig_" + tooBigFolderCounter++);
-						tempFolder.renameTo(renamedFolder);
-						for (FileInventoryItem fi : filesInThisBatch) {
-							fileInventoryByTempName.remove(fi.getTempFilePath());
-							fi.setTempFilePath(fi.getTempFilePath().replace(tempFolder.getAbsolutePath(), renamedFolder.getAbsolutePath()));
-							fileInventoryByTempName.put(fi.getTempFilePath(), fi);
-
-						}
-
-						// try to run the same thing with a smaller max source file size
-						batchInfos.addAll(createBatchesFromDirectory(myJob, renamedFolder.toString(), batchPrefix, moveFiles, maxNumberOfFilesInBatch, (int) (currentMaxRequestSize * BACKOFFFACTOR)));
-
-						// assume that we ultimately got all the files into a batch or dumped into error folder
-						FileUtils.deleteDirectory(renamedFolder);
-					}
+					finishABatch(myJob,tempFolder, batchPrefix, tempFolderCounter, currentMaxRequestSize, batchInfos, filesInThisBatch, moveFiles, maxNumberOfFilesInBatch);
 				} catch (AsyncApiException e) {
 					log("Tried to upload batch of size: " + (maxRequestSize - bytesLeft) + " files: " + numFiles + "but failed.", Loglevel.NORMAL);
 					log(e.getMessage(), Loglevel.NORMAL);
@@ -413,17 +382,8 @@ public class BulkFileLoader {
 			String requestFilename = tempFolder + File.separator + "request.txt";	
 			Utils.writeFile(requestFilename, requesttxt);
 			// now create batch out of temp folder
-			BatchInfo batchInfo = null;
 			try {
-				batchInfo = createBatchFromZippedDirectory(myJob,Paths.get(tempFolder.toURI()), batchPrefix, tempFolderCounter, currentMaxRequestSize);
-				batchInfos.add(batchInfo);
-				batchMap.put("" + tempFolderCounter, batchInfo);
-				// update the file inventory items in this batch so they know which batch they're part of
-				for (FileInventoryItem fi : filesInThisBatch) {
-					fi.setBatchId(batchInfo.getId());
-					completeFileList.add(fi);
-				}
-				batchInventoryMapByBatchId.put(batchInfo.getId(), filesInThisBatch);
+				finishABatch(myJob,tempFolder, batchPrefix, tempFolderCounter, currentMaxRequestSize, batchInfos, filesInThisBatch, moveFiles, maxNumberOfFilesInBatch);
 			} catch (AsyncApiException e) {
 				log(e.getMessage(), Loglevel.BRIEF);
 
@@ -455,6 +415,45 @@ public class BulkFileLoader {
 
 
 		return batchInfos;
+	}
+
+	private void finishABatch(JobInfo myJob, File tempFolder, String batchPrefix, Integer tempFolderCounter2,
+			int currentMaxRequestSize, ArrayList<BatchInfo> batchInfos, ArrayList<FileInventoryItem> filesInThisBatch,
+			boolean moveFiles, int maxNumberOfFilesInBatch) throws AsyncApiException, IOException {
+		BatchInfo batchInfo = null;
+		batchInfo = createBatchFromZippedDirectory(myJob,Paths.get(tempFolder.toURI()), batchPrefix, tempFolderCounter2, currentMaxRequestSize);
+		if (batchInfo != null) {
+			batchMap.put("" + tempFolderCounter, batchInfo);
+			batchInfos.add(batchInfo);
+			// update the file inventory items in this batch so they know which batch they're part of
+			for (FileInventoryItem fi : filesInThisBatch) {
+				fi.setBatchId(batchInfo.getId());
+				completeFileList.add(fi);
+			}
+			batchInventoryMapByBatchId.put(batchInfo.getId(), filesInThisBatch);
+		} else {
+			// zipped file too big, need to split it up
+			
+			// remove request.txt file
+			FileUtils.deleteQuietly(new File(tempFolder.getAbsoluteFile() + File.separator + "request.txt"));
+
+			// first rename the current temp folder to a different filename
+			File renamedFolder = new File(tmpFolder + File.separator + "toobig_" + tooBigFolderCounter++);
+			tempFolder.renameTo(renamedFolder);
+			for (FileInventoryItem fi : filesInThisBatch) {
+				fileInventoryByTempName.remove(fi.getTempFilePath());
+				fi.setTempFilePath(fi.getTempFilePath().replace(tempFolder.getAbsolutePath(), renamedFolder.getAbsolutePath()));
+				fileInventoryByTempName.put(fi.getTempFilePath(), fi);
+
+			}
+
+			// try to run the same thing with a smaller max source file size
+			batchInfos.addAll(createBatchesFromDirectory(myJob, renamedFolder.toString(), batchPrefix, moveFiles, maxNumberOfFilesInBatch, (int) (currentMaxRequestSize * BACKOFFFACTOR)));
+
+			// assume that we ultimately got all the files into a batch or dumped into error folder
+			FileUtils.deleteDirectory(renamedFolder);
+		}
+		
 	}
 
 	private File getSafeFilename(File file) {
