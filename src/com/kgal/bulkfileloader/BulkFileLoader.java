@@ -470,7 +470,7 @@ public class BulkFileLoader {
 			} else {
 				newName = name.replace(name.substring(fileExtensionStart), "_1" + name.substring(fileExtensionStart));
 			}
-			return getSafeFilename(new File(file.getPath() + File.separator + newName));
+			return getSafeFilename(new File(file.getParent() + File.separator + newName));
 
 		} else return file;
 	}
