@@ -16,6 +16,7 @@ import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
 import org.apache.commons.io.FileUtils;
@@ -32,6 +33,10 @@ import com.sforce.async.JobStateEnum;
 import com.sforce.async.BatchInfo;
 import com.sforce.async.BatchStateEnum;
 import com.sforce.async.OperationEnum;
+import com.sforce.soap.partner.PartnerConnection;
+import com.sforce.soap.partner.QueryResult;
+import com.sforce.soap.partner.sobject.SObject;
+import com.sforce.ws.ConnectionException;
 
 
 public class BulkFileLoader {
@@ -65,7 +70,8 @@ public class BulkFileLoader {
 	private final Map<String, BatchInfo> batchMap    = new HashMap<>();
 
 	private int maxRequestSize;
-	private BulkConnection                      bulkConnection;
+	private BulkConnection                      	bulkConnection;
+	private PartnerConnection 					partnerConnection = null;
 
 	private String srcFolder;
 	private String tmpFolder;
@@ -78,7 +84,10 @@ public class BulkFileLoader {
 	private double compressedSize = 0;
 	private double uncompressedSize = 0;
 	private File failedFolder;
-	
+	private int totalSuccesses = 0;
+	private int totalFails = 0;
+	private int totalProcessed = 0;
+
 	private Map<Integer, FileInventoryItem> fileInventoryByNumber = new HashMap<Integer, FileInventoryItem>();
 	private Map<String, FileInventoryItem> fileInventoryBySourceName = new HashMap<String, FileInventoryItem>();
 	private Map<String, FileInventoryItem> fileInventoryByTempName = new HashMap<String, FileInventoryItem>();
@@ -95,13 +104,17 @@ public class BulkFileLoader {
 	}
 
 	private void endTiming(long startTime, String message) {
+		endTiming(startTime, message, Loglevel.NORMAL);
+	}
+	
+	private void endTiming(long startTime, String message, Loglevel level) {
 		final long end = System.currentTimeMillis();
 		final long diff = ((end - startTime));
 		final String hms = String.format("%02d:%02d:%02d", TimeUnit.MILLISECONDS.toHours(diff),
 				TimeUnit.MILLISECONDS.toMinutes(diff) - TimeUnit.HOURS.toMinutes(TimeUnit.MILLISECONDS.toHours(diff)),
 				TimeUnit.MILLISECONDS.toSeconds(diff)
 				- TimeUnit.MINUTES.toSeconds(TimeUnit.MILLISECONDS.toMinutes(diff)));
-		this.log(message + " duration: " + hms, Loglevel.NORMAL);
+		this.log(message + " duration: " + hms, level);
 	}
 
 	private void log(final String logText, final Loglevel level) {
@@ -118,7 +131,7 @@ public class BulkFileLoader {
 	public void run() throws RemoteException, Exception {
 
 		// set loglevel based on parameters
-		this.loglevel = ("verbose".equals(this.parameters.get("loglevel"))) ? Loglevel.VERBOSE : Loglevel.NORMAL;
+		this.loglevel = ("verbose".equals(this.parameters.get("loglevel"))) ? Loglevel.NORMAL : Loglevel.BRIEF;
 
 		maxRequestSize = Integer.valueOf(this.parameters.get(BulkFileLoaderCommandLine.MAXREQUESTSIZE_LONGNAME));
 		if (maxRequestSize < 1) {
@@ -148,9 +161,9 @@ public class BulkFileLoader {
 		// do starting setup
 
 		setupBasicStuff();
-		
+
 		// make an inventory of all the files
-		
+
 		createFileInventory(srcFolder);
 
 		// create batches from directory
@@ -162,41 +175,45 @@ public class BulkFileLoader {
 		closeJob(bulkConnection, myJob);
 
 		// await completion
+		
+		log("******************************************************", Loglevel.BRIEF);
+		log("*       Batch Results                          *", Loglevel.BRIEF);
+		log("******************************************************", Loglevel.BRIEF);
 
 		awaitCompletion(bulkConnection, myJob, batchInfos);
 
 		// check results
 
 		checkResults(bulkConnection, myJob, batchInfos);
-		
+
 		writeResultsFile();
 
-		endTiming(startTime, "Overall operation");
-		log("Number of batches too big:" + (tooBigFolderCounter - 1), Loglevel.NORMAL);
-		log("Uncompressed size:" + String.format("%,d", (int)uncompressedSize) + " bytes", Loglevel.NORMAL);
-		log("Compressed size:" + String.format("%,d", (int)compressedSize) + " bytes", Loglevel.NORMAL);
-		log("Overall compression ratio:" + String.format("%.2f", getCompressionRatio()), Loglevel.NORMAL);
-		log("Rate:" + String.format("%.2f", uncompressedSize/1024/1024/((System.currentTimeMillis()-startTime)/1000)) + "Mb/s", Loglevel.NORMAL);
+		endTiming(startTime, "Overall operation", Loglevel.BRIEF);
+		log("Number of batches too big:" + (tooBigFolderCounter - 1), Loglevel.BRIEF);
+		log("Uncompressed size:" + String.format("%,d", (int)uncompressedSize) + " bytes", Loglevel.BRIEF);
+		log("Compressed size:" + String.format("%,d", (int)compressedSize) + " bytes", Loglevel.BRIEF);
+		log("Overall compression ratio:" + String.format("%.2f", getCompressionRatio()), Loglevel.BRIEF);
+		log("Rate:" + String.format("%.2f", uncompressedSize/1024/1024/((System.currentTimeMillis()-startTime)/1000)) + "Mb/s", Loglevel.BRIEF);
 
 	}
 
 	private void writeResultsFile() throws IOException {
 		// initialize output file
-				String outputFilename = srcFolder + File.separator + "output.csv";	
-				BufferedWriter bw = new BufferedWriter(new FileWriter(outputFilename));
-				
-				// write output file into source folder
-				final String headerRow = "ContentVersionID,PathOnClient,TempPath,ContentDocumentId,Success,Error";
-				bw.write(headerRow);
-				bw.newLine();
-				
-				for (FileInventoryItem fii : completeFileList) {
-					bw.write(fii.getOutputLine());
-					bw.newLine();
-				}
-				bw.flush();
-				bw.close();
-		
+		String outputFilename = srcFolder + File.separator + "output.csv";	
+		BufferedWriter bw = new BufferedWriter(new FileWriter(outputFilename));
+
+		// write output file into source folder
+		final String headerRow = "ContentVersionID,PathOnClient,TempPath,ContentDocumentId,Success,Error";
+		bw.write(headerRow);
+		bw.newLine();
+
+		for (FileInventoryItem fii : completeFileList) {
+			bw.write(fii.getOutputLine());
+			bw.newLine();
+		}
+		bw.flush();
+		bw.close();
+
 	}
 
 	private void createFileInventory(String sourceFolder) {
@@ -242,7 +259,7 @@ public class BulkFileLoader {
 		ArrayList<String> failedBatchFolderNames = new ArrayList<String>();
 
 		Iterator<File> i = myFiles.iterator();
-		
+
 		File tempFolder = null;
 		Integer numFiles = 0;
 
@@ -263,26 +280,26 @@ public class BulkFileLoader {
 		FileUtils.deleteDirectory(tempFolder);
 		tempFolder.mkdirs();
 		log("Created batch folder: " + tempFolder.getAbsolutePath(), Loglevel.NORMAL);
-		
+
 		// set up where fails go
-		
+
 
 		while (i.hasNext()) {
 			File f = i.next();
-			
+
 			// locate it in inventory
 			FileInventoryItem fii = fileInventoryBySourceName.get(f.getAbsolutePath());
 			if (fii == null) {
 				fii = fileInventoryByTempName.get(f.getAbsolutePath());
 			}
-			
+
 			if (fii == null) {
 				File failedFile = new File(failedFolder.toString() + File.separator + f.getName());
 				f.renameTo(failedFile);
 				log("File " + f.getAbsolutePath() + " not found in inventory - something is wrong. Moving to failed: " + failedFile.getAbsolutePath(), Loglevel.BRIEF);
 				continue;
 			}
-			
+
 			if (f.length() > currentMaxRequestSize || f.length() == 0) {
 				// file too big altogether, stop processing
 				File failedFile = new File(failedFolder.toString() + File.separator + f.getName());
@@ -309,6 +326,9 @@ public class BulkFileLoader {
 						batchInventoryMapByBatchId.put(batchInfo.getId(), filesInThisBatch);
 					} else {
 						// zipped file too big, need to split it up
+						
+						// remove request.txt file
+						FileUtils.deleteQuietly(new File(tempFolder.getAbsoluteFile() + File.separator + "request.txt"));
 
 						// first rename the current temp folder to a different filename
 						File renamedFolder = new File(tmpFolder + File.separator + "toobig_" + tooBigFolderCounter++);
@@ -317,7 +337,7 @@ public class BulkFileLoader {
 							fileInventoryByTempName.remove(fi.getTempFilePath());
 							fi.setTempFilePath(fi.getTempFilePath().replace(tempFolder.getAbsolutePath(), renamedFolder.getAbsolutePath()));
 							fileInventoryByTempName.put(fi.getTempFilePath(), fi);
-							
+
 						}
 
 						// try to run the same thing with a smaller max source file size
@@ -353,11 +373,11 @@ public class BulkFileLoader {
 			if (!f.isFile() || f.getName().startsWith(".")) { 
 				continue;
 			}
-			
+
 			// move this file into the temp directory, but check if we have something of the same name there alredy,
 			// if we do, rename
-			
-			
+
+
 			File targetFile = getSafeFilename(new File(tempFolder + File.separator + f.getName()));
 			if (this.parameters.containsKey(BulkFileLoaderCommandLine.MOVEFILES_LONGNAME)) {
 				FileUtils.moveFile(f, targetFile);
@@ -451,7 +471,7 @@ public class BulkFileLoader {
 				newName = name.replace(name.substring(fileExtensionStart), "_1" + name.substring(fileExtensionStart));
 			}
 			return getSafeFilename(new File(file.getPath() + File.separator + newName));
-			
+
 		} else return file;
 	}
 
@@ -475,7 +495,7 @@ public class BulkFileLoader {
 
 		File zippedBatch = new File(zipTarget);
 		if (zippedBatch.length() > MAXZIPPEDBATCHSIZE) {
-			log("Zipped batch over " + MAXZIPPEDBATCHSIZE + " byte size limit. Must split into smaller chunks.", Loglevel.BRIEF);
+			log("Zipped batch over " + MAXZIPPEDBATCHSIZE + " byte size limit. Must split into smaller chunks.", Loglevel.NORMAL);
 			// remove old zip file
 			zippedBatch.delete();
 			return null;
@@ -483,12 +503,13 @@ public class BulkFileLoader {
 			startTime = startTiming();
 			BatchInfo b = bulkConnection.createBatchFromZipStream(job, Files.newInputStream(Paths.get(zipTarget)));
 			endTiming(startTime, "Upload time");
+			log("Created batch " + batchNumber + " ID: " + b.getId() + " " + zipTarget , Loglevel.BRIEF);
 			totalFiles += filesCount;
 			totalFilesSent += filesCount;
 			int compressedSizeOfThisZip = (int) new File(zipTarget).length();
 			compressedSize += compressedSizeOfThisZip;
 			uncompressedSize += size;
-			log("Compression ratio now: " + getCompressionRatio(), Loglevel.BRIEF);
+			log("Compression ratio now: " + String.format("%.2f",getCompressionRatio()), Loglevel.NORMAL);
 			log("Total files tried so far: " + totalFiles + " uploaded: " + totalFilesSent + " last batch size uncompressed: " + String.format("%,d",size)
 			+ " bytes, compressed: " + String.format("%,d", compressedSizeOfThisZip) + " ratio: " + String.format("%.2f", (float)compressedSizeOfThisZip/size), Loglevel.NORMAL);
 			return b;
@@ -556,8 +577,10 @@ public class BulkFileLoader {
 	 * @param batchInfoList
 	 *            List of batches for this job.
 	 * @throws AsyncApiException
+	 * @throws IOException 
+	 * @throws ConnectionException 
 	 */
-	private void awaitCompletion(BulkConnection connection, JobInfo job, ArrayList<BatchInfo> batchInfoList) throws AsyncApiException {
+	private void awaitCompletion(BulkConnection connection, JobInfo job, ArrayList<BatchInfo> batchInfoList) throws AsyncApiException, IOException, ConnectionException {
 		long sleepTime = 0L;
 		HashSet<String> incomplete = new HashSet<String>();
 		for (BatchInfo bi : batchInfoList) {
@@ -567,7 +590,7 @@ public class BulkFileLoader {
 			try {
 				Thread.sleep(sleepTime);
 			} catch (InterruptedException e) {}
-			System.out.println("Awaiting results..." + incomplete.size() + " batches outstanding.");
+			log("Waiting on results for " + incomplete.size() + " batches outstanding.", Loglevel.BRIEF);
 			sleepTime = 10000L;
 			BatchInfo[] statusList =
 					connection.getBatchInfoList(job.getId()).getBatchInfo();
@@ -575,6 +598,54 @@ public class BulkFileLoader {
 				if (b.getState() == BatchStateEnum.Completed
 						|| b.getState() == BatchStateEnum.Failed) {
 					if (incomplete.remove(b.getId())) {
+						CSVReader rdr =	new CSVReader(connection.getBatchResultStream(job.getId(), b.getId()));
+						ArrayList<String> resultHeader = rdr.nextRecord();
+						int resultCols = resultHeader.size();
+						List<FileInventoryItem> batchFileList = batchInventoryMapByBatchId.get(b.getId());
+						Iterator<FileInventoryItem> fiiIterator = batchFileList.iterator();
+
+						ArrayList<String> row;
+						int fails = 0;
+						int successes = 0;
+						while ((row = rdr.nextRecord()) != null) {
+							totalProcessed++;
+							FileInventoryItem fii = null;
+							if (fiiIterator.hasNext()) {
+								fii = fiiIterator.next();
+							}
+							if (fii == null) {
+								log("Something's wrong. No more files left in inventory list, but more result rows remain.", Loglevel.NORMAL);
+							}
+							Map<String, String> resultInfo = new HashMap<String, String>();
+							for (int i = 0; i < resultCols; i++) {
+								resultInfo.put(resultHeader.get(i), row.get(i));
+							}
+							boolean success = Boolean.valueOf(resultInfo.get("Success"));
+							boolean created = Boolean.valueOf(resultInfo.get("Created"));
+
+							String contentVersionId = resultInfo.get("Id");
+							String error = resultInfo.get("Error");
+							if (!fii.getBatchId().equals(b.getId())) {
+								log("Something's wrong. BatchID and the file's batch ID recorded in inventory don't match.", Loglevel.NORMAL);
+							} else {
+								fii.setContentVersionID(contentVersionId);
+								fii.setSuccess(success);
+								fii.setError(error);
+							}
+
+							if (success && created) {
+								//					System.out.println("Created row with id " + id);
+								successes++;
+								totalSuccesses++;
+							} else if (!success) {
+								System.out.println("Failed with error: " + error);
+								fails++;
+								totalFails++;
+							}
+						}
+						log("Batch: " + b.getId() + " Successes: " + successes + " Fails: " + fails + " API time: " + b.getApiActiveProcessingTime(), Loglevel.BRIEF);
+						getContentDocumentIDsForBatch(b);
+						
 						//						System.out.println("BATCH STATUS:\n" + b);
 						log("Batch: " + b.getId() + " Successes: " + (b.getNumberRecordsProcessed() - b.getNumberRecordsFailed()) + 
 								" Fails: " + b.getNumberRecordsFailed() + " API time: " + b.getApiActiveProcessingTime(), Loglevel.NORMAL);
@@ -584,69 +655,91 @@ public class BulkFileLoader {
 		}
 	}
 
-	/**
-	 * Gets the results of the operation and checks for errors.
-	 */
-	private void checkResults(BulkConnection connection, JobInfo job, ArrayList<BatchInfo> batchInfoList) throws AsyncApiException, IOException {
-		// batchInfoList was populated when batches were created and submitted
+	private void getContentDocumentIDsForBatch(BatchInfo b) throws ConnectionException {
+		log("Looking for contentDocumentIDs for batch" + b.getId(), Loglevel.NORMAL);
+		// find the right batch to populate IDs for
+		List<FileInventoryItem> batchFileList = batchInventoryMapByBatchId.get(b.getId());
 
-		log("******************************************************", Loglevel.BRIEF);
-		log("*       Batch Results                          *", Loglevel.BRIEF);
-		log("******************************************************", Loglevel.BRIEF);
-		int totalSuccesses = 0;
-		int totalFails = 0;
+		// first get the contentversionIDs
+
+		final Set<String> cvIDs = new HashSet<>();
+
+		for (final FileInventoryItem fii : batchFileList) {
+			cvIDs.add(fii.getContentVersionID());
+		}
+
+		// remove the null ID if it appears
+
+		cvIDs.remove(null);
+
+		// now call salesforce to get the contentversions and contentDocuments
+
+		final Map<String, String> contentDocumentsMapByCVID = new HashMap<>();
+
+		// login if needed 
 		
-		
-		
-		for (BatchInfo b : batchInfoList) {
-			CSVReader rdr =	new CSVReader(connection.getBatchResultStream(job.getId(), b.getId()));
-			ArrayList<String> resultHeader = rdr.nextRecord();
-			int resultCols = resultHeader.size();
-			List<FileInventoryItem> batchFileList = batchInventoryMapByBatchId.get(b.getId());
-			Iterator<FileInventoryItem> fiiIterator = batchFileList.iterator();
-			
-			ArrayList<String> row;
-			int fails = 0;
-			int successes = 0;
-			while ((row = rdr.nextRecord()) != null) {
-				FileInventoryItem fii = null;
-				if (fiiIterator.hasNext()) {
-					fii = fiiIterator.next();
+		if (partnerConnection == null) {
+			partnerConnection = LoginUtil.soapLogin(
+					this.parameters.get(BulkFileLoaderCommandLine.SERVERURL_LONGNAME) + BulkFileLoader.URLBASE + this.myApiVersion,
+					this.parameters.get(BulkFileLoaderCommandLine.USERNAME_LONGNAME),
+					this.parameters.get(BulkFileLoaderCommandLine.PASSWORD_LONGNAME)
+					);
+		}
+
+
+		// build the query
+
+		final String queryStart = "SELECT ContentDocumentId,Id,Title FROM ContentVersion WHERE ID IN(";
+		final String queryEnd = ")";
+		final String[] myIDs = cvIDs.toArray(new String[cvIDs.size()]);
+		final String queryMid = "'" + String.join("','", myIDs) + "'";
+
+		final String query = queryStart + queryMid + queryEnd;
+
+		log("Looking for contentDocumentIDs for " + cvIDs.size() + " documents.", Loglevel.NORMAL);
+		log("Query: " + query, Loglevel.NORMAL);
+
+		// run the query
+
+		QueryResult qResult = partnerConnection.query(query);
+
+		boolean done = false;
+		if (qResult.getSize() > 0) {
+			log("Found " + qResult.getSize() + " documents.", Loglevel.NORMAL);
+			while (!done) {
+				final SObject[] records = qResult.getRecords();
+				for (final SObject o : records) {
+					contentDocumentsMapByCVID.put((String)o.getField("Id"), (String)o.getField("ContentDocumentId"));
 				}
-				if (fii == null) {
-					log("Something's wrong. No more files left in inventory list, but more result rows remain.", Loglevel.BRIEF);
-				}
-				Map<String, String> resultInfo = new HashMap<String, String>();
-				for (int i = 0; i < resultCols; i++) {
-					resultInfo.put(resultHeader.get(i), row.get(i));
-				}
-				boolean success = Boolean.valueOf(resultInfo.get("Success"));
-				boolean created = Boolean.valueOf(resultInfo.get("Created"));
-				
-				String contentVersionId = resultInfo.get("Id");
-				String error = resultInfo.get("Error");
-				if (fii.getBatchId() != b.getId()) {
-					log("Something's wrong. BatchID and the file's batch ID recorded in inventory don't match.", Loglevel.BRIEF);
+				if (qResult.isDone()) {
+					done = true;
 				} else {
-					fii.setContentVersionID(contentVersionId);
-					fii.setSuccess(success);
-					fii.setError(error);
-				}
-
-				if (success && created) {
-					//					System.out.println("Created row with id " + id);
-					successes++;
-				} else if (!success) {
-					System.out.println("Failed with error: " + error);
-					fails++;
+					qResult = partnerConnection.queryMore(qResult.getQueryLocator());
 				}
 			}
-			log("Batch: " + b.getId() + " Successes: " + successes + " Fails: " + fails + " API time: " + b.getApiActiveProcessingTime(), Loglevel.NORMAL);
-			totalSuccesses += successes;
-			totalFails += fails;
-
+		} else {
+			System.out.println("No records found.");
 		}
-		log("Total successes: " + totalSuccesses + " Fails: " + totalFails, Loglevel.NORMAL);
+
+		// now run through the files and update the FileInventoryItem
+		
+		for (FileInventoryItem fii : batchFileList) {
+			fii.setContentDocumentID(contentDocumentsMapByCVID.get(fii.getContentVersionID()));
+		}
+
+	}
+
+	/**
+	 * Gets the results of the operation and checks for errors.
+	 * @throws ConnectionException 
+	 */
+	private void checkResults(BulkConnection connection, JobInfo job, ArrayList<BatchInfo> batchInfoList) throws AsyncApiException, IOException, ConnectionException {
+		// batchInfoList was populated when batches were created and submitted
+		
+		log("******************************************************", Loglevel.BRIEF);
+		log("*       Job Results                          *", Loglevel.BRIEF);
+		log("******************************************************", Loglevel.BRIEF);
+		log("Total processed: " + totalProcessed + " Total successes: " + totalSuccesses + " Fails: " + totalFails, Loglevel.BRIEF);
 	}
 
 	private double getCompressionRatio() {

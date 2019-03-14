@@ -21,7 +21,7 @@ public class LoginUtil {
            config.setUsername(user);
            config.setPassword(pwd);
 
-           System.out.println("AuthEndPoint: " + url);
+           //System.out.println("AuthEndPoint: " + url);
            config.setAuthEndpoint(url);
 
            conn = new PartnerConnection(config);
@@ -53,7 +53,7 @@ public class LoginUtil {
         partnerConfig.setUsername(user);
         partnerConfig.setPassword(pwd);
         partnerConfig.setAuthEndpoint(url);
-        System.out.println("AuthEndPoint: " + url);
+        //System.out.println("AuthEndPoint: " + url);
         // Creating the connection automatically handles login and stores
         // the session in partnerConfig
         new PartnerConnection(partnerConfig);
