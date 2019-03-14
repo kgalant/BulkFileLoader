@@ -37,6 +37,8 @@ public class BulkFileLoaderCommandLine {
 	public static final String SERVERURL = "s";
 	public static final String SERVERURL_LONGNAME = "serverurl";
 	public static final String SKIPPATTERNS = "sp";	
+	public static final String MOVEFILES_LONGNAME = "movefiles";
+	public static final String MOVEFILES = "mf";	
 
 	/**
 	 * @param args
@@ -105,6 +107,7 @@ public class BulkFileLoaderCommandLine {
 					this.addParameterFromProperty(props, MAXREQUESTSIZE_LONGNAME);
 					this.addParameterFromProperty(props, BASEDIRECTORY_LONGNAME);
 					this.addParameterFromProperty(props, TEMPDIRECTORY_LONGNAME);
+					this.addParameterFromProperty(props, MOVEFILES_LONGNAME);
 
 				}
 			}
@@ -121,6 +124,7 @@ public class BulkFileLoaderCommandLine {
 		this.addCmdlineParameter(line, USERNAME, USERNAME_LONGNAME);
 		this.addCmdlineParameter(line, SERVERURL, SERVERURL_LONGNAME);
 		this.addCmdlineParameter(line, PASSWORD, PASSWORD_LONGNAME);
+		this.addCmdlineParameter(line, MOVEFILES, MOVEFILES_LONGNAME);
 
 
 		////////////////////////////////////////////////////////////////////////

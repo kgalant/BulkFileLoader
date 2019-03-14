@@ -1,17 +1,20 @@
 package com.kgal.bulkfileloader;
 
+
+import java.io.BufferedWriter;
 import java.io.File;
+import java.io.FileWriter;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.rmi.RemoteException;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
@@ -60,6 +63,7 @@ public class BulkFileLoader {
 
 	private final Map<String, String> parameters    = new HashMap<>();
 	private final Map<String, BatchInfo> batchMap    = new HashMap<>();
+
 	private int maxRequestSize;
 	private BulkConnection                      bulkConnection;
 
@@ -74,7 +78,12 @@ public class BulkFileLoader {
 	private double compressedSize = 0;
 	private double uncompressedSize = 0;
 	private File failedFolder;
-
+	
+	private Map<Integer, FileInventoryItem> fileInventoryByNumber = new HashMap<Integer, FileInventoryItem>();
+	private Map<String, FileInventoryItem> fileInventoryBySourceName = new HashMap<String, FileInventoryItem>();
+	private Map<String, FileInventoryItem> fileInventoryByTempName = new HashMap<String, FileInventoryItem>();
+	private final Map<String, ArrayList<FileInventoryItem>> batchInventoryMapByBatchId    = new HashMap<String, ArrayList<FileInventoryItem>>();
+	private final List<FileInventoryItem> completeFileList = new ArrayList<>();
 
 	public static void main(String[] args) {
 		// TODO Auto-generated method stub
@@ -139,6 +148,10 @@ public class BulkFileLoader {
 		// do starting setup
 
 		setupBasicStuff();
+		
+		// make an inventory of all the files
+		
+		createFileInventory(srcFolder);
 
 		// create batches from directory
 
@@ -155,6 +168,8 @@ public class BulkFileLoader {
 		// check results
 
 		checkResults(bulkConnection, myJob, batchInfos);
+		
+		writeResultsFile();
 
 		endTiming(startTime, "Overall operation");
 		log("Number of batches too big:" + (tooBigFolderCounter - 1), Loglevel.NORMAL);
@@ -163,6 +178,42 @@ public class BulkFileLoader {
 		log("Overall compression ratio:" + String.format("%.2f", getCompressionRatio()), Loglevel.NORMAL);
 		log("Rate:" + String.format("%.2f", uncompressedSize/1024/1024/((System.currentTimeMillis()-startTime)/1000)) + "Mb/s", Loglevel.NORMAL);
 
+	}
+
+	private void writeResultsFile() throws IOException {
+		// initialize output file
+				String outputFilename = srcFolder + File.separator + "output.csv";	
+				BufferedWriter bw = new BufferedWriter(new FileWriter(outputFilename));
+				
+				// write output file into source folder
+				final String headerRow = "ContentVersionID,PathOnClient,TempPath,ContentDocumentId,Success,Error";
+				bw.write(headerRow);
+				bw.newLine();
+				
+				for (FileInventoryItem fii : completeFileList) {
+					bw.write(fii.getOutputLine());
+					bw.newLine();
+				}
+				bw.flush();
+				bw.close();
+		
+	}
+
+	private void createFileInventory(String sourceFolder) {
+		Collection<File> myFiles = FileUtils.listFiles(new File(sourceFolder), null, true);
+		// first, run through all the files and inventory them
+		int fileCounter = 0;
+
+		Iterator<File> i = myFiles.iterator(); 
+		while (i.hasNext()) {
+			File f = i.next();
+			// set up the inventory
+			FileInventoryItem fii = new FileInventoryItem();
+			fii.setFileNumber(fileCounter++);
+			fii.setSourceFilePath(f.getAbsolutePath());
+			fileInventoryByNumber.put(fileCounter, fii);
+			fileInventoryBySourceName.put(f.getAbsolutePath(), fii);
+		}
 	}
 
 	private void setupBasicStuff() throws IOException {
@@ -187,9 +238,11 @@ public class BulkFileLoader {
 		Collection<File> myFiles = FileUtils.listFiles(myDirectory, null, true);
 
 		ArrayList<BatchInfo> batchInfos = new ArrayList<BatchInfo>();
+
 		ArrayList<String> failedBatchFolderNames = new ArrayList<String>();
 
 		Iterator<File> i = myFiles.iterator();
+		
 		File tempFolder = null;
 		Integer numFiles = 0;
 
@@ -203,16 +256,33 @@ public class BulkFileLoader {
 		int bytesLeft = currentMaxRequestSize;
 
 		ArrayList<String> requesttxt = new ArrayList<String>();
+		ArrayList<FileInventoryItem> filesInThisBatch = new ArrayList<FileInventoryItem>();
 		requesttxt.add(headerRow);
 		bytesLeft -= (headerRow.length() + 2); // adding space for CRLF 
 		tempFolder = new File(tmpFolder + File.separator + batchPrefix + tempFolderCounter);
 		FileUtils.deleteDirectory(tempFolder);
 		tempFolder.mkdirs();
 		log("Created batch folder: " + tempFolder.getAbsolutePath(), Loglevel.NORMAL);
+		
+		// set up where fails go
+		
 
 		while (i.hasNext()) {
 			File f = i.next();
-
+			
+			// locate it in inventory
+			FileInventoryItem fii = fileInventoryBySourceName.get(f.getAbsolutePath());
+			if (fii == null) {
+				fii = fileInventoryByTempName.get(f.getAbsolutePath());
+			}
+			
+			if (fii == null) {
+				File failedFile = new File(failedFolder.toString() + File.separator + f.getName());
+				f.renameTo(failedFile);
+				log("File " + f.getAbsolutePath() + " not found in inventory - something is wrong. Moving to failed: " + failedFile.getAbsolutePath(), Loglevel.BRIEF);
+				continue;
+			}
+			
 			if (f.length() > currentMaxRequestSize || f.length() == 0) {
 				// file too big altogether, stop processing
 				File failedFile = new File(failedFolder.toString() + File.separator + f.getName());
@@ -231,12 +301,24 @@ public class BulkFileLoader {
 					if (batchInfo != null) {
 						batchMap.put("" + tempFolderCounter, batchInfo);
 						batchInfos.add(batchInfo);
+						// update the file inventory items in this batch so they know which batch they're part of
+						for (FileInventoryItem fi : filesInThisBatch) {
+							fi.setBatchId(batchInfo.getId());
+							completeFileList.add(fi);
+						}
+						batchInventoryMapByBatchId.put(batchInfo.getId(), filesInThisBatch);
 					} else {
 						// zipped file too big, need to split it up
 
 						// first rename the current temp folder to a different filename
 						File renamedFolder = new File(tmpFolder + File.separator + "toobig_" + tooBigFolderCounter++);
 						tempFolder.renameTo(renamedFolder);
+						for (FileInventoryItem fi : filesInThisBatch) {
+							fileInventoryByTempName.remove(fi.getTempFilePath());
+							fi.setTempFilePath(fi.getTempFilePath().replace(tempFolder.getAbsolutePath(), renamedFolder.getAbsolutePath()));
+							fileInventoryByTempName.put(fi.getTempFilePath(), fi);
+							
+						}
 
 						// try to run the same thing with a smaller max source file size
 						batchInfos.addAll(createBatchesFromDirectory(myJob, renamedFolder.toString(), batchPrefix, moveFiles, maxNumberOfFilesInBatch, (int) (currentMaxRequestSize * BACKOFFFACTOR)));
@@ -261,20 +343,33 @@ public class BulkFileLoader {
 
 				requesttxt.clear();
 				requesttxt.add(headerRow);
+				filesInThisBatch = new ArrayList<>();
 				bytesLeft -= (headerRow.length() + 2); // adding space for CRLF 
 				tempFolder = new File(tmpFolder + File.separator + batchPrefix + ++tempFolderCounter);
 				tempFolder.mkdirs();
 				log("Created batch folder: " + tempFolder.getName(), Loglevel.NORMAL);
 
 			}
-			if (!f.isFile()) { 
+			if (!f.isFile() || f.getName().startsWith(".")) { 
 				continue;
 			}
-			// move this file into the temp directory
-			File targetFile = new File(tempFolder + File.separator + f.getName()); 
-			//				f.renameTo(targetFile);
-			FileUtils.copyFile(f, targetFile);
-			numFiles++;
+			
+			// move this file into the temp directory, but check if we have something of the same name there alredy,
+			// if we do, rename
+			
+			
+			File targetFile = getSafeFilename(new File(tempFolder + File.separator + f.getName()));
+			if (this.parameters.containsKey(BulkFileLoaderCommandLine.MOVEFILES_LONGNAME)) {
+				FileUtils.moveFile(f, targetFile);
+			} else {
+				FileUtils.copyFile(f, targetFile);				
+			}		
+			fileInventoryByTempName.put(targetFile.getAbsolutePath(), fii);
+			fii.setTempFilePath(targetFile.getAbsolutePath());
+			fii.setBatchNumber(tempFolderCounter);
+			fii.setNumberInBatch(numFiles++);
+			filesInThisBatch.add(fii);
+
 			// deduct size of this file to keep track of what we have left
 
 			bytesLeft -= targetFile.length();
@@ -303,6 +398,12 @@ public class BulkFileLoader {
 				batchInfo = createBatchFromZippedDirectory(myJob,Paths.get(tempFolder.toURI()), batchPrefix, tempFolderCounter, currentMaxRequestSize);
 				batchInfos.add(batchInfo);
 				batchMap.put("" + tempFolderCounter, batchInfo);
+				// update the file inventory items in this batch so they know which batch they're part of
+				for (FileInventoryItem fi : filesInThisBatch) {
+					fi.setBatchId(batchInfo.getId());
+					completeFileList.add(fi);
+				}
+				batchInventoryMapByBatchId.put(batchInfo.getId(), filesInThisBatch);
 			} catch (AsyncApiException e) {
 				log(e.getMessage(), Loglevel.BRIEF);
 
@@ -334,6 +435,24 @@ public class BulkFileLoader {
 
 
 		return batchInfos;
+	}
+
+	private File getSafeFilename(File file) {
+		if (file.exists()) {
+			String name = file.getName();
+			// append a counter to the name just before the suffix
+			// myfile.pdf -> myfile_1.pdf
+			// if no suffix, just append at the end
+			int fileExtensionStart = name.lastIndexOf(".");
+			String newName = null;
+			if (fileExtensionStart == -1) {
+				newName = name + "_1";
+			} else {
+				newName = name.replace(name.substring(fileExtensionStart), "_1" + name.substring(fileExtensionStart));
+			}
+			return getSafeFilename(new File(file.getPath() + File.separator + newName));
+			
+		} else return file;
 	}
 
 	private BatchInfo createBatchFromZippedDirectory(JobInfo job, Path fileDir, String batchFilenamePrefix, int batchNumber, int currentMaxSize)
@@ -476,23 +595,44 @@ public class BulkFileLoader {
 		log("******************************************************", Loglevel.BRIEF);
 		int totalSuccesses = 0;
 		int totalFails = 0;
+		
+		
+		
 		for (BatchInfo b : batchInfoList) {
 			CSVReader rdr =	new CSVReader(connection.getBatchResultStream(job.getId(), b.getId()));
 			ArrayList<String> resultHeader = rdr.nextRecord();
 			int resultCols = resultHeader.size();
-
+			List<FileInventoryItem> batchFileList = batchInventoryMapByBatchId.get(b.getId());
+			Iterator<FileInventoryItem> fiiIterator = batchFileList.iterator();
+			
 			ArrayList<String> row;
 			int fails = 0;
 			int successes = 0;
 			while ((row = rdr.nextRecord()) != null) {
+				FileInventoryItem fii = null;
+				if (fiiIterator.hasNext()) {
+					fii = fiiIterator.next();
+				}
+				if (fii == null) {
+					log("Something's wrong. No more files left in inventory list, but more result rows remain.", Loglevel.BRIEF);
+				}
 				Map<String, String> resultInfo = new HashMap<String, String>();
 				for (int i = 0; i < resultCols; i++) {
 					resultInfo.put(resultHeader.get(i), row.get(i));
 				}
 				boolean success = Boolean.valueOf(resultInfo.get("Success"));
 				boolean created = Boolean.valueOf(resultInfo.get("Created"));
-				String id = resultInfo.get("Id");
+				
+				String contentVersionId = resultInfo.get("Id");
 				String error = resultInfo.get("Error");
+				if (fii.getBatchId() != b.getId()) {
+					log("Something's wrong. BatchID and the file's batch ID recorded in inventory don't match.", Loglevel.BRIEF);
+				} else {
+					fii.setContentVersionID(contentVersionId);
+					fii.setSuccess(success);
+					fii.setError(error);
+				}
+
 				if (success && created) {
 					//					System.out.println("Created row with id " + id);
 					successes++;
