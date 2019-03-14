@@ -11,6 +11,7 @@ public class FileInventoryItem {
 	private String batchId;
 	private boolean success;
 	private String error;
+	private long size;
 	
 	public String getBatchId() {
 		return batchId;
@@ -95,6 +96,14 @@ public class FileInventoryItem {
 
 	public void setError(String error) {
 		this.error = error;
+	}
+
+	public long getSize() {
+		return size;
+	}
+
+	public void setSize(long size) {
+		this.size = size;
 	}
 
 }
