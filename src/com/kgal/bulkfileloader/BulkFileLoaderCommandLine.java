@@ -38,7 +38,9 @@ public class BulkFileLoaderCommandLine {
 	public static final String SERVERURL_LONGNAME = "serverurl";
 	public static final String SKIPPATTERNS = "sp";	
 	public static final String MOVEFILES_LONGNAME = "movefiles";
-	public static final String MOVEFILES = "mf";	
+	public static final String MOVEFILES = "mf";
+	public static final String VERBOSE = "v";
+	public static final String VERBOSE_LONGNAME = "verbose";
 
 	/**
 	 * @param args
@@ -107,7 +109,8 @@ public class BulkFileLoaderCommandLine {
 					this.addParameterFromProperty(props, MAXREQUESTSIZE_LONGNAME);
 					this.addParameterFromProperty(props, BASEDIRECTORY_LONGNAME);
 					this.addParameterFromProperty(props, TEMPDIRECTORY_LONGNAME);
-					this.addParameterFromProperty(props, MOVEFILES_LONGNAME);
+					this.addBooleanParameterFromProperty(props, MOVEFILES_LONGNAME);
+					this.addBooleanParameterFromProperty(props, VERBOSE_LONGNAME);
 
 				}
 			}
@@ -124,7 +127,8 @@ public class BulkFileLoaderCommandLine {
 		this.addCmdlineParameter(line, USERNAME, USERNAME_LONGNAME);
 		this.addCmdlineParameter(line, SERVERURL, SERVERURL_LONGNAME);
 		this.addCmdlineParameter(line, PASSWORD, PASSWORD_LONGNAME);
-		this.addCmdlineParameter(line, MOVEFILES, MOVEFILES_LONGNAME);
+		this.addBooleanParameter(line, MOVEFILES, MOVEFILES_LONGNAME);
+		this.addBooleanParameter(line, VERBOSE, VERBOSE_LONGNAME);
 
 
 		////////////////////////////////////////////////////////////////////////
@@ -135,10 +139,14 @@ public class BulkFileLoaderCommandLine {
 
 		// set maxitems to default value if nothing provided
 		if (!this.isParameterProvided(MAXREQUESTSIZE_LONGNAME)) {
-			//System.out.println("No maxitems parameter provided, will default to " + PackageBuilder.MAXITEMSINPACKAGE + ".");
 			this.parameters.put(MAXREQUESTSIZE_LONGNAME, String.valueOf(BulkFileLoader.MAXREQUESTSIZE));
 		} 
 
+		// if verbose parameter is provided, set loglevel to verbose, else it will default to normal
+		if (isOptionSet(VERBOSE_LONGNAME)) {
+			this.parameters.put("loglevel", VERBOSE_LONGNAME);
+		}        
+		
 		////////////////////////////////////////////////////////////////////////
 		//
 		// now check that we have minimum parameters needed to run
@@ -254,7 +262,7 @@ public class BulkFileLoaderCommandLine {
 
 		// handling of max items per package
 		this.options.addOption(Option.builder(MAXREQUESTSIZE).longOpt(MAXREQUESTSIZE_LONGNAME)
-				.desc("max number of items to put in a single package xml (defaults to 10000 if not provided)")
+				.desc("max number of files to put in a single batch (defaults to 1000 if not provided)")
 				.hasArg()
 				.build());
 
@@ -265,6 +273,24 @@ public class BulkFileLoaderCommandLine {
 				.hasArg()
 				.build());     
 
+		this.options.addOption(Option.builder(BASEDIRECTORY).longOpt(BASEDIRECTORY_LONGNAME)
+				.desc("source directory for upload all files and files in directories below this directory will be attempted uploaded. Output.csv file will be placed in this directory")
+				.hasArg()
+				.build());
 
+		this.options.addOption(Option.builder(TEMPDIRECTORY).longOpt(TEMPDIRECTORY_LONGNAME)
+				.desc("where the temporary files (temp folders and zipped batches) will be placed")
+				.hasArg()
+				.build());
+
+		this.options.addOption(Option.builder(TEMPDIRECTORY).longOpt(TEMPDIRECTORY_LONGNAME)
+				.desc("if this flag is set, files to upload will be moved (rather than copied) to the temporary directory")
+				.build());
+
+		// adding handling for brief output parameter
+
+		this.options.addOption(Option.builder(VERBOSE).longOpt(VERBOSE_LONGNAME)
+				.desc("output verbose logging instead of just core output")
+				.build());
 	}
 }
