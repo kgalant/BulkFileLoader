@@ -63,6 +63,9 @@ public class BulkFileLoader {
 	private static final String  URLBASE                = "/services/Soap/u/";
 	private static final String  BATCHFOLDERPREFIX		= "Batch_";
 	private static final long MAXSINGLEFILELENGTH = 10485760;
+
+
+	private static final int MAXFILESPERBATCH = 998;
 	public static void main(String[] args) {
 		// TODO Auto-generated method stub
 
@@ -142,57 +145,67 @@ public class BulkFileLoader {
 				if (b.getState() == BatchStateEnum.Completed
 						|| b.getState() == BatchStateEnum.Failed) {
 					if (incomplete.remove(b.getId())) {
-						CSVReader rdr =	new CSVReader(connection.getBatchResultStream(job.getId(), b.getId()));
-						ArrayList<String> resultHeader = rdr.nextRecord();
-						int resultCols = resultHeader.size();
 						List<FileInventoryItem> batchFileList = batchInventoryMapByBatchId.get(b.getId());
 						Iterator<FileInventoryItem> fiiIterator = batchFileList.iterator();
+						try {
+							CSVReader rdr =	new CSVReader(connection.getBatchResultStream(job.getId(), b.getId()));
+							ArrayList<String> resultHeader = rdr.nextRecord();
+							int resultCols = resultHeader.size();
 
-						ArrayList<String> row;
-						int fails = 0;
-						int successes = 0;
-						while ((row = rdr.nextRecord()) != null) {
-							totalProcessed++;
-							FileInventoryItem fii = null;
-							if (fiiIterator.hasNext()) {
-								fii = fiiIterator.next();
-							}
-							if (fii == null) {
-								log("Something's wrong. No more files left in inventory list, but more result rows remain.", Loglevel.NORMAL);
-							}
-							Map<String, String> resultInfo = new HashMap<String, String>();
-							for (int i = 0; i < resultCols; i++) {
-								resultInfo.put(resultHeader.get(i), row.get(i));
-							}
-							boolean success = Boolean.valueOf(resultInfo.get("Success"));
-							boolean created = Boolean.valueOf(resultInfo.get("Created"));
+							ArrayList<String> row;
+							int fails = 0;
+							int successes = 0;
+							while ((row = rdr.nextRecord()) != null) {
+								totalProcessed++;
+								FileInventoryItem fii = null;
+								if (fiiIterator.hasNext()) {
+									fii = fiiIterator.next();
+								}
+								if (fii == null) {
+									log("Something's wrong. No more files left in inventory list, but more result rows remain.", Loglevel.NORMAL);
+								}
+								Map<String, String> resultInfo = new HashMap<String, String>();
+								for (int i = 0; i < resultCols; i++) {
+									resultInfo.put(resultHeader.get(i), row.get(i));
+								}
+								boolean success = Boolean.valueOf(resultInfo.get("Success"));
+								boolean created = Boolean.valueOf(resultInfo.get("Created"));
 
-							String contentVersionId = resultInfo.get("Id");
-							String error = resultInfo.get("Error");
-							if (!fii.getBatchId().equals(b.getId())) {
-								log("Something's wrong. BatchID and the file's batch ID recorded in inventory don't match.", Loglevel.NORMAL);
-							} else {
-								fii.setContentVersionID(contentVersionId);
-								fii.setSuccess(success);
-								fii.setError(error);
-							}
+								String contentVersionId = resultInfo.get("Id");
+								String error = resultInfo.get("Error");
+								if (!fii.getBatchId().equals(b.getId())) {
+									log("Something's wrong. BatchID and the file's batch ID recorded in inventory don't match.", Loglevel.NORMAL);
+								} else {
+									fii.setContentVersionID(contentVersionId);
+									fii.setSuccess(success);
+									fii.setError(error);
+								}
 
-							if (success && created) {
-								//					System.out.println("Created row with id " + id);
-								successes++;
-								totalSuccesses++;
-							} else if (!success) {
-								System.out.println("Failed with error: " + error);
-								fails++;
-								totalFails++;
+								if (success && created) {
+									//					System.out.println("Created row with id " + id);
+									successes++;
+									totalSuccesses++;
+								} else if (!success) {
+									System.out.println("Failed with error: " + error);
+									fails++;
+									totalFails++;
+								}
+							}
+							log("Batch: " + b.getId() + " Successes: " + successes + " Fails: " + fails + " API time: " + b.getApiActiveProcessingTime(), Loglevel.BRIEF);
+							getContentDocumentIDsForBatch(b);
+						} catch (AsyncApiException e) {
+							// TODO Auto-generated catch block
+							log("Batch: " + b.getId() + " Error occurred fetching results: " + e.getExceptionCode() + " " + e.getMessage(), Loglevel.BRIEF);
+							
+							// mark all the files as errored
+							while (fiiIterator.hasNext()) {
+								FileInventoryItem fii = fiiIterator.next();
+								fii.setError(e.getExceptionCode() + " " + e.getExceptionMessage());
+								fii.setSuccess(false);
+								fii.setContentDocumentID("");
+								fii.setContentVersionID("");
 							}
 						}
-						log("Batch: " + b.getId() + " Successes: " + successes + " Fails: " + fails + " API time: " + b.getApiActiveProcessingTime(), Loglevel.BRIEF);
-						getContentDocumentIDsForBatch(b);
-
-						//						System.out.println("BATCH STATUS:\n" + b);
-						log("Batch: " + b.getId() + " Successes: " + (b.getNumberRecordsProcessed() - b.getNumberRecordsFailed()) + 
-								" Fails: " + b.getNumberRecordsFailed() + " API time: " + b.getApiActiveProcessingTime(), Loglevel.NORMAL);
 					}
 				}
 			}
@@ -244,12 +257,18 @@ public class BulkFileLoader {
 				if (f.length() > currentMaxRequestSize || f.length() == 0 || f.length() > MAXSINGLEFILELENGTH) {
 					// file too big altogether, stop processing
 					File failedFile = new File(failedFolder.toString() + File.separator + f.getName());
+					
+					// count the failed files in the stats
+					totalFiles++;
+					totalProcessedBytes += f.length();
+					
 					if (this.parameters.containsKey(BulkFileLoaderCommandLine.MOVEFILES_LONGNAME)) {
 						FileUtils.moveFile(f, failedFile);
 					} else {
 						FileUtils.copyFile(f, failedFile);				
 					}		
 					log("File " + f.getAbsolutePath() + " (size " + f.length() + " bytes) is too big or has size 0, cannot continue. Moving to failed: " + failedFile.getAbsolutePath(), Loglevel.BRIEF);
+
 					continue;
 				}
 				if (f == null || !f.isFile() || f.getName().startsWith(".")) { 
@@ -557,11 +576,30 @@ public class BulkFileLoader {
 		endTiming(startTime, "Inventory");
 	}
 
+	/**
+	 * Create a new job using the Bulk API - will always upload ContentVersion
+	 * 
+	 * @param connection
+	 *            BulkConnection used to create the new job.
+	 * @return The JobInfo for the new job.
+	 * @throws AsyncApiException
+	 */
+	private JobInfo createJob(BulkConnection connection) throws AsyncApiException {
+		JobInfo job = new JobInfo();
+		job.setObject("ContentVersion");
+		job.setOperation(OperationEnum.insert);
+		job.setContentType(ContentType.ZIP_CSV);
+		job = connection.createJob(job);
+		//System.out.println(job);
+		return job;
+	}
+	
 	/*
 	 * 
 	 * Method sorts the entire file inventory using bin sort algorithm
 	 * 
 	 */
+
 
 	private void doBinSort() {
 		long startTime = startTiming();
@@ -576,6 +614,7 @@ public class BulkFileLoader {
 				b.fileList.add(fii);
 				b.isOversizeBin = true;
 				b.totalSize += size;
+				b.binFiles ++;
 				batchBins.add(batchBins.size()-1, b);
 				continue;
 			} else {
@@ -583,9 +622,10 @@ public class BulkFileLoader {
 				Iterator<BatchBin> binIterator = batchBins.iterator(); 
 				while (!binFound && binIterator.hasNext()) {
 					BatchBin b = binIterator.next();
-					if (b.totalSize + fii.getSize() < MAXZIPPEDBATCHSIZE) {
+					if (b.totalSize + fii.getSize() < MAXZIPPEDBATCHSIZE && b.binFiles < MAXFILESPERBATCH) {
 						b.fileList.add(fii);
 						b.totalSize += size;
+						b.binFiles++;
 						binFound = true;
 					}
 				}
@@ -606,24 +646,6 @@ public class BulkFileLoader {
 			totalSize += b.totalSize;
 		}
 		log("Total file size: " + String.format("%,d", totalSize) + " bytes", Loglevel.NORMAL);
-	}
-
-	/**
-	 * Create a new job using the Bulk API - will always upload ContentVersion
-	 * 
-	 * @param connection
-	 *            BulkConnection used to create the new job.
-	 * @return The JobInfo for the new job.
-	 * @throws AsyncApiException
-	 */
-	private JobInfo createJob(BulkConnection connection) throws AsyncApiException {
-		JobInfo job = new JobInfo();
-		job.setObject("ContentVersion");
-		job.setOperation(OperationEnum.insert);
-		job.setContentType(ContentType.ZIP_CSV);
-		job = connection.createJob(job);
-		//System.out.println(job);
-		return job;
 	}
 
 	private void endTiming(long startTime, String message) {
@@ -719,44 +741,61 @@ public class BulkFileLoader {
 		}
 
 
-		// build the query
+		// build the query (-ies)
+		
+		List<String> queries = new ArrayList<String>();
+		
 
 		final String queryStart = "SELECT ContentDocumentId,Id,Title FROM ContentVersion WHERE ID IN(";
 		final String queryEnd = ")";
 		final String[] myIDs = cvIDs.toArray(new String[cvIDs.size()]);
-		final String queryMid = "'" + String.join("','", myIDs) + "'";
+		String queryMid = "'" + String.join("','", myIDs)+ "'";
 
 		final String query = queryStart + queryMid + queryEnd;
-
+		
+		if (query.length() > 19999) {// SOQL query length limit
+			// split the array in two, do two queries
+			List<String> IDList = new ArrayList<String>(cvIDs);
+			queryMid = "'" + String.join("','", IDList.subList(0, 500)) + "'";
+			queries.add(queryStart + queryMid + queryEnd);
+			queryMid = "'" + String.join("','", IDList.subList(0, 500)) + "'";
+			queries.add(queryStart + queryMid + queryEnd);
+		} else {
+			queries.add(query);
+		}
+			
 		log("Looking for contentDocumentIDs for " + cvIDs.size() + " documents.", Loglevel.NORMAL);
 		log("Query: " + query, Loglevel.NORMAL);
 
 		// run the query
 
-		QueryResult qResult = partnerConnection.query(query);
+		for (String q : queries) {
 
-		boolean done = false;
-		if (qResult.getSize() > 0) {
-			log("Found " + qResult.getSize() + " documents.", Loglevel.NORMAL);
-			while (!done) {
-				final SObject[] records = qResult.getRecords();
-				for (final SObject o : records) {
-					contentDocumentsMapByCVID.put((String)o.getField("Id"), (String)o.getField("ContentDocumentId"));
+			QueryResult qResult = partnerConnection.query(q);
+
+			boolean done = false;
+			if (qResult.getSize() > 0) {
+				log("Found " + qResult.getSize() + " documents.", Loglevel.NORMAL);
+				while (!done) {
+					final SObject[] records = qResult.getRecords();
+					for (final SObject o : records) {
+						contentDocumentsMapByCVID.put((String)o.getField("Id"), (String)o.getField("ContentDocumentId"));
+					}
+					if (qResult.isDone()) {
+						done = true;
+					} else {
+						qResult = partnerConnection.queryMore(qResult.getQueryLocator());
+					}
 				}
-				if (qResult.isDone()) {
-					done = true;
-				} else {
-					qResult = partnerConnection.queryMore(qResult.getQueryLocator());
-				}
+			} else {
+				System.out.println("No records found.");
 			}
-		} else {
-			System.out.println("No records found.");
-		}
 
-		// now run through the files and update the FileInventoryItem
+			// now run through the files and update the FileInventoryItem
 
-		for (FileInventoryItem fii : batchFileList) {
-			fii.setContentDocumentID(contentDocumentsMapByCVID.get(fii.getContentVersionID()));
+			for (FileInventoryItem fii : batchFileList) {
+				fii.setContentDocumentID(contentDocumentsMapByCVID.get(fii.getContentVersionID()));
+			}
 		}
 
 	}
@@ -812,71 +851,79 @@ public class BulkFileLoader {
 		}
 	}
 	public void run() throws RemoteException, Exception {
+		JobInfo myJob = null;
+		try {
+			// set loglevel based on parameters
+			this.loglevel = ("verbose".equals(this.parameters.get("loglevel"))) ? Loglevel.NORMAL : Loglevel.BRIEF;
 
-		// set loglevel based on parameters
-		this.loglevel = ("verbose".equals(this.parameters.get("loglevel"))) ? Loglevel.NORMAL : Loglevel.BRIEF;
+			maxRequestSize = Integer.valueOf(this.parameters.get(BulkFileLoaderCommandLine.MAXREQUESTSIZE_LONGNAME));
+			if (maxRequestSize < 1) {
+				maxRequestSize = MAXREQUESTSIZE;
+			}
 
-		maxRequestSize = Integer.valueOf(this.parameters.get(BulkFileLoaderCommandLine.MAXREQUESTSIZE_LONGNAME));
-		if (maxRequestSize < 1) {
-			maxRequestSize = MAXREQUESTSIZE;
+			this.myApiVersion = Double.parseDouble(this.parameters.get(BulkFileLoaderCommandLine.APIVERSION_LONGNAME));
+
+			this.startTime = startTiming();
+
+			// do starting setup
+
+			setupBasicStuff();
+
+			// make an inventory of all the files
+
+			createFileInventory(srcFolder);
+			doBinSort();
+
+			// get connection
+
+			bulkConnection = LoginUtil.getBulkConnection(
+					this.parameters.get(BulkFileLoaderCommandLine.SERVERURL_LONGNAME) + BulkFileLoader.URLBASE + this.myApiVersion,
+					this.parameters.get(BulkFileLoaderCommandLine.USERNAME_LONGNAME),
+					this.parameters.get(BulkFileLoaderCommandLine.PASSWORD_LONGNAME),
+					String.valueOf(this.myApiVersion)
+					);
+
+			// create job
+
+
+
+			 myJob = createJob(bulkConnection);
+
+			// create batches from directory
+
+			//ArrayList<BatchInfo> batchInfos = createBatchesFromDirectory(myJob, srcFolder, BATCHFOLDERPREFIX, false, 998, maxRequestSize);
+			ArrayList<BatchInfo> batchInfos = createBatchesFromBins(myJob, srcFolder, BATCHFOLDERPREFIX, false, MAXFILESPERBATCH, maxRequestSize);
+			// close job
+
+			closeJob(bulkConnection, myJob);
+
+			// await completion
+
+			log("******************************************************", Loglevel.BRIEF);
+			log("*       Batch Results                          *", Loglevel.BRIEF);
+			log("******************************************************", Loglevel.BRIEF);
+
+			awaitCompletion(bulkConnection, myJob, batchInfos);
+
+			// check results
+
+			checkResults(bulkConnection, myJob, batchInfos);
+
+			writeResultsFile();
+
+			endTiming(this.startTime, "Overall operation", Loglevel.BRIEF);
+			log("Number of batches too big:" + (tooBigFolderCounter - 1), Loglevel.BRIEF);
+			log("Uncompressed size:" + String.format("%,d", (int)uncompressedSize) + " bytes", Loglevel.BRIEF);
+			log("Compressed size:" + String.format("%,d", (int)compressedSize) + " bytes", Loglevel.BRIEF);
+			log("Overall compression ratio:" + String.format("%.2f", getCompressionRatio()), Loglevel.BRIEF);
+			log("Rate:" + String.format("%.2f", uncompressedSize/1024/1024/((System.currentTimeMillis()-startTime)/1000)) + "Mb/s", Loglevel.BRIEF);
+		} catch (Exception e) {
+			e.printStackTrace();
+		} finally {
+			if (myJob != null && myJob.getState() != com.sforce.async.JobStateEnum.Closed) {
+				bulkConnection.closeJob(myJob.getId());
+			}
 		}
-
-		this.myApiVersion = Double.parseDouble(this.parameters.get(BulkFileLoaderCommandLine.APIVERSION_LONGNAME));
-
-		this.startTime = startTiming();
-
-		// do starting setup
-
-		setupBasicStuff();
-
-		// make an inventory of all the files
-
-		createFileInventory(srcFolder);
-		doBinSort();
-
-		// get connection
-
-		bulkConnection = LoginUtil.getBulkConnection(
-				this.parameters.get(BulkFileLoaderCommandLine.SERVERURL_LONGNAME) + BulkFileLoader.URLBASE + this.myApiVersion,
-				this.parameters.get(BulkFileLoaderCommandLine.USERNAME_LONGNAME),
-				this.parameters.get(BulkFileLoaderCommandLine.PASSWORD_LONGNAME),
-				String.valueOf(this.myApiVersion)
-				);
-
-		// create job
-
-
-
-		JobInfo myJob = createJob(bulkConnection);
-
-		// create batches from directory
-
-		//ArrayList<BatchInfo> batchInfos = createBatchesFromDirectory(myJob, srcFolder, BATCHFOLDERPREFIX, false, 998, maxRequestSize);
-		ArrayList<BatchInfo> batchInfos = createBatchesFromBins(myJob, srcFolder, BATCHFOLDERPREFIX, false, 998, maxRequestSize);
-		// close job
-
-		closeJob(bulkConnection, myJob);
-
-		// await completion
-
-		log("******************************************************", Loglevel.BRIEF);
-		log("*       Batch Results                          *", Loglevel.BRIEF);
-		log("******************************************************", Loglevel.BRIEF);
-
-		awaitCompletion(bulkConnection, myJob, batchInfos);
-
-		// check results
-
-		checkResults(bulkConnection, myJob, batchInfos);
-
-		writeResultsFile();
-
-		endTiming(this.startTime, "Overall operation", Loglevel.BRIEF);
-		log("Number of batches too big:" + (tooBigFolderCounter - 1), Loglevel.BRIEF);
-		log("Uncompressed size:" + String.format("%,d", (int)uncompressedSize) + " bytes", Loglevel.BRIEF);
-		log("Compressed size:" + String.format("%,d", (int)compressedSize) + " bytes", Loglevel.BRIEF);
-		log("Overall compression ratio:" + String.format("%.2f", getCompressionRatio()), Loglevel.BRIEF);
-		log("Rate:" + String.format("%.2f", uncompressedSize/1024/1024/((System.currentTimeMillis()-startTime)/1000)) + "Mb/s", Loglevel.BRIEF);
 
 	}
 
