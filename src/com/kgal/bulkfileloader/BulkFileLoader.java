@@ -18,12 +18,16 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
+import java.util.logging.ConsoleHandler;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 import org.apache.commons.io.FileUtils;
 
 import com.kgal.SFLogin.LoginUtil;
 import com.kgal.bulkfileloader.BulkFileLoaderCommandLine;
 import com.kgal.bulkfileloader.Utils;
+import com.kgal.bulkfileloader.output.LogFormatter;
 import com.sforce.async.AsyncApiException;
 import com.sforce.async.BulkConnection;
 import com.sforce.async.CSVReader;
@@ -41,19 +45,10 @@ import com.sforce.ws.ConnectionException;
 
 public class BulkFileLoader {
 
-	public enum Loglevel {
-		VERBOSE(2), NORMAL(1), BRIEF(0);
-		private final int level;
-
-		Loglevel(final int level) {
-			this.level = level;
-		}
-
-		int getLevel() {
-			return this.level;
-		}
-
-	}
+	// Logging
+	private final Logger logger = Logger.getLogger(Logger.GLOBAL_LOGGER_NAME);
+	private Level loglevel;
+	
 	public static final int     MAXREQUESTSIZE      = 20920000;;
 
 
@@ -71,7 +66,6 @@ public class BulkFileLoader {
 
 	}
 
-	private Loglevel          loglevel;
 
 	private double                                  myApiVersion;
 	private final Map<String, String> parameters    = new HashMap<>();
@@ -99,15 +93,19 @@ public class BulkFileLoader {
 	private long totalProcessedBytes = 0;
 
 	private long totalToProcessBytes = 0;
-	private Map<Integer, FileInventoryItem> fileInventoryByNumber = new HashMap<Integer, FileInventoryItem>();
+	private List<FileInventoryItem> fileInventoryByNumber = new ArrayList<FileInventoryItem>();
 	private Map<String, FileInventoryItem> fileInventoryBySourceName = new HashMap<String, FileInventoryItem>();
 	private Map<String, FileInventoryItem> fileInventoryByTempName = new HashMap<String, FileInventoryItem>();
+	private List<FileInventoryItem> failedFileInventoryList = new ArrayList<FileInventoryItem>();
 	private final Map<String, ArrayList<FileInventoryItem>> batchInventoryMapByBatchId    = new HashMap<String, ArrayList<FileInventoryItem>>();
 	private List<BatchBin> batchBins = new ArrayList<BatchBin>();
 
 	private final List<FileInventoryItem> completeFileList = new ArrayList<>();
 
 	private long startTime;
+
+
+	private File successSingleFileFolder;
 
 	public BulkFileLoader(final Map<String, String> parameters) {
 		this.parameters.putAll(parameters);
@@ -137,7 +135,7 @@ public class BulkFileLoader {
 			try {
 				Thread.sleep(sleepTime);
 			} catch (InterruptedException e) {}
-			log("Waiting on results for " + incomplete.size() + " remaining batches.", Loglevel.BRIEF);
+			logger.log(Level.INFO, "Waiting on results for " + incomplete.size() + " remaining batches.");
 			sleepTime = 10000L;
 			BatchInfo[] statusList =
 					connection.getBatchInfoList(job.getId()).getBatchInfo();
@@ -162,7 +160,7 @@ public class BulkFileLoader {
 									fii = fiiIterator.next();
 								}
 								if (fii == null) {
-									log("Something's wrong. No more files left in inventory list, but more result rows remain.", Loglevel.NORMAL);
+									logger.log(Level.FINE, "Something's wrong. No more files left in inventory list, but more result rows remain.");
 								}
 								Map<String, String> resultInfo = new HashMap<String, String>();
 								for (int i = 0; i < resultCols; i++) {
@@ -174,7 +172,7 @@ public class BulkFileLoader {
 								String contentVersionId = resultInfo.get("Id");
 								String error = resultInfo.get("Error");
 								if (!fii.getBatchId().equals(b.getId())) {
-									log("Something's wrong. BatchID and the file's batch ID recorded in inventory don't match.", Loglevel.NORMAL);
+									logger.log(Level.FINE, "Something's wrong. BatchID and the file's batch ID recorded in inventory don't match.");
 								} else {
 									fii.setContentVersionID(contentVersionId);
 									fii.setSuccess(success);
@@ -191,12 +189,12 @@ public class BulkFileLoader {
 									totalFails++;
 								}
 							}
-							log("Batch: " + b.getId() + " Successes: " + successes + " Fails: " + fails + " API time: " + b.getApiActiveProcessingTime(), Loglevel.BRIEF);
+							logger.log(Level.INFO, "Batch: " + b.getId() + " Successes: " + successes + " Fails: " + fails + " API time: " + b.getApiActiveProcessingTime());
 							getContentDocumentIDsForBatch(b);
 						} catch (AsyncApiException e) {
 							// TODO Auto-generated catch block
-							log("Batch: " + b.getId() + " Error occurred fetching results: " + e.getExceptionCode() + " " + e.getMessage(), Loglevel.BRIEF);
-							
+							logger.log(Level.INFO, "Batch: " + b.getId() + " Error occurred fetching results: " + e.getExceptionCode() + " " + e.getMessage());
+							totalFails += batchFileList.size();
 							// mark all the files as errored
 							while (fiiIterator.hasNext()) {
 								FileInventoryItem fii = fiiIterator.next();
@@ -219,10 +217,10 @@ public class BulkFileLoader {
 	private void checkResults(BulkConnection connection, JobInfo job, ArrayList<BatchInfo> batchInfoList) throws AsyncApiException, IOException, ConnectionException {
 		// batchInfoList was populated when batches were created and submitted
 
-		log("******************************************************", Loglevel.BRIEF);
-		log("*       Job Results                          *", Loglevel.BRIEF);
-		log("******************************************************", Loglevel.BRIEF);
-		log("Total processed: " + totalProcessed + " Total successes: " + totalSuccesses + " Fails: " + totalFails, Loglevel.BRIEF);
+		logger.log(Level.INFO, "******************************************************");
+		logger.log(Level.INFO, "*       Job Results                          *");
+		logger.log(Level.INFO, "******************************************************");
+		logger.log(Level.INFO, "Total processed: " + totalProcessed + " Total successes: " + totalSuccesses + " Fails: " + totalFails);
 	}
 
 	private void closeJob(BulkConnection connection, JobInfo myJob)	throws AsyncApiException {
@@ -250,24 +248,26 @@ public class BulkFileLoader {
 			tempFolder = new File(tmpFolder + File.separator + batchPrefix + tempFolderCounter);
 			FileUtils.deleteDirectory(tempFolder);
 			tempFolder.mkdirs();
-			log("Created batch folder: " + tempFolder.getAbsolutePath(), Loglevel.NORMAL);
+			logger.log(Level.FINE, "Created batch folder: " + tempFolder.getAbsolutePath());
 			for (FileInventoryItem fii : b.fileList) {
 				File f = new File(fii.getSourceFilePath());
 
 				if (f.length() > currentMaxRequestSize || f.length() == 0 || f.length() > MAXSINGLEFILELENGTH) {
 					// file too big altogether, stop processing
 					File failedFile = new File(failedFolder.toString() + File.separator + f.getName());
-					
+
 					// count the failed files in the stats
 					totalFiles++;
 					totalProcessedBytes += f.length();
-					
+
 					if (this.parameters.containsKey(BulkFileLoaderCommandLine.MOVEFILES_LONGNAME)) {
 						FileUtils.moveFile(f, failedFile);
 					} else {
 						FileUtils.copyFile(f, failedFile);				
-					}		
-					log("File " + f.getAbsolutePath() + " (size " + f.length() + " bytes) is too big or has size 0, cannot continue. Moving to failed: " + failedFile.getAbsolutePath(), Loglevel.BRIEF);
+					}
+					fii.setTempFilePath(failedFile.getAbsolutePath());
+					failedFileInventoryList.add(fii);
+					logger.log(Level.INFO, "File " + f.getAbsolutePath() + " (size " + f.length() + " bytes) is too big or has size 0, cannot continue. Moving to failed: " + failedFile.getAbsolutePath().trim());
 
 					continue;
 				}
@@ -294,13 +294,13 @@ public class BulkFileLoader {
 				bytesLeft -= targetFile.length();
 				// add to requesttxt
 				String requestLine = 
-						targetFile.getName().trim() + "," + 			// Title
-								targetFile.getName().trim() + "," + 			// Description
-								"#" + targetFile.getName().trim() + "," + 			// VersionData
-								targetFile.getAbsolutePath();			// PathOnClient
+						"\"" +targetFile.getName().trim() + "\"" + "," + 			// Title
+								"\"" +		targetFile.getName().trim() + "\"" + "," + 		// Description
+								"\"" + "#" + targetFile.getName().trim() + "\"" + "," + 			// VersionData
+								"\"" + targetFile.getAbsolutePath() + "\"";			// PathOnClient
 				requesttxt.add(requestLine);
 				bytesLeft -= (requestLine.length() + 2);	
-				//				log("Batch: " + tempFolderCounter + " adding file: " + targetFile.getName(), Loglevel.NORMAL);
+				//				logger.log(Level.FINE, "Batch: " + tempFolderCounter + " adding file: " + targetFile.getName());
 			}
 			// write request.txt into temp folder
 			try {
@@ -311,8 +311,8 @@ public class BulkFileLoader {
 					tempFolderCounter++;
 				}
 			} catch (AsyncApiException e) {
-				log("Tried to upload batch of size: " + (maxRequestSize - bytesLeft) + " files: " + numFiles + "but failed.", Loglevel.NORMAL);
-				log(e.getMessage(), Loglevel.NORMAL);
+				logger.log(Level.FINE, "Tried to upload batch of size: " + (maxRequestSize - bytesLeft) + " files: " + numFiles + "but failed.");
+				logger.log(Level.FINE, e.getMessage());
 				System.out.println(e.getCause());
 				System.out.println(e.getExceptionCode());
 				System.out.println(e.getStackTrace());
@@ -356,7 +356,7 @@ public class BulkFileLoader {
 		tempFolder = new File(tmpFolder + File.separator + batchPrefix + tempFolderCounter);
 		FileUtils.deleteDirectory(tempFolder);
 		tempFolder.mkdirs();
-		log("Created batch folder: " + tempFolder.getAbsolutePath(), Loglevel.NORMAL);
+		logger.log(Level.FINE, "Created batch folder: " + tempFolder.getAbsolutePath());
 
 		// set up where fails go
 
@@ -373,7 +373,7 @@ public class BulkFileLoader {
 			if (fii == null) {
 				File failedFile = new File(failedFolder.toString() + File.separator + f.getName());
 				f.renameTo(failedFile);
-				log("File " + f.getAbsolutePath() + " not found in inventory - something is wrong. Moving to failed: " + failedFile.getAbsolutePath(), Loglevel.BRIEF);
+				logger.log(Level.INFO, "File " + f.getAbsolutePath() + " not found in inventory - something is wrong. Moving to failed: " + failedFile.getAbsolutePath());
 				continue;
 			}
 
@@ -381,7 +381,7 @@ public class BulkFileLoader {
 				// file too big altogether, stop processing
 				File failedFile = new File(failedFolder.toString() + File.separator + f.getName());
 				f.renameTo(failedFile);
-				log("File " + f.getAbsolutePath() + " (size " + f.length() + " bytes) is too big or has size 0, cannot continue. Moving to failed: " + failedFile.getAbsolutePath(), Loglevel.BRIEF);
+				logger.log(Level.INFO, "File " + f.getAbsolutePath() + " (size " + f.length() + " bytes) is too big or has size 0, cannot continue. Moving to failed: " + failedFile.getAbsolutePath());
 				continue;
 			} else if (f.length() * getCompressionRatio() > bytesLeft || numFiles > maxNumberOfFilesInBatch){
 				// finish processing this batch
@@ -393,8 +393,8 @@ public class BulkFileLoader {
 				try {
 					finishABatch(myJob,tempFolder, batchPrefix, tempFolderCounter, currentMaxRequestSize, batchInfos, filesInThisBatch, moveFiles, maxNumberOfFilesInBatch);
 				} catch (AsyncApiException e) {
-					log("Tried to upload batch of size: " + (maxRequestSize - bytesLeft) + " files: " + numFiles + "but failed.", Loglevel.NORMAL);
-					log(e.getMessage(), Loglevel.NORMAL);
+					logger.log(Level.FINE, "Tried to upload batch of size: " + (maxRequestSize - bytesLeft) + " files: " + numFiles + "but failed.");
+					logger.log(Level.FINE, e.getMessage());
 					System.out.println(e.getCause());
 					System.out.println(e.getExceptionCode());
 					System.out.println(e.getStackTrace());
@@ -413,7 +413,7 @@ public class BulkFileLoader {
 				bytesLeft -= (headerRow.length() + 2); // adding space for CRLF 
 				tempFolder = new File(tmpFolder + File.separator + batchPrefix + ++tempFolderCounter);
 				tempFolder.mkdirs();
-				log("Created batch folder: " + tempFolder.getName(), Loglevel.NORMAL);
+				logger.log(Level.FINE, "Created batch folder: " + tempFolder.getName());
 
 			}
 			if (!f.isFile() || f.getName().startsWith(".")) { 
@@ -446,7 +446,7 @@ public class BulkFileLoader {
 							targetFile.getAbsolutePath();			// PathOnClient
 			requesttxt.add(requestLine);
 			bytesLeft -= (requestLine.length() + 2);	
-			//				log("Batch: " + tempFolderCounter + " adding file: " + targetFile.getName(), Loglevel.NORMAL);
+			//				logger.log(Level.FINE, "Batch: " + tempFolderCounter + " adding file: " + targetFile.getName());
 		}
 
 
@@ -461,7 +461,7 @@ public class BulkFileLoader {
 			try {
 				finishABatch(myJob,tempFolder, batchPrefix, tempFolderCounter, currentMaxRequestSize, batchInfos, filesInThisBatch, moveFiles, maxNumberOfFilesInBatch);
 			} catch (AsyncApiException e) {
-				log(e.getMessage(), Loglevel.BRIEF);
+				logger.log(Level.INFO, e.getMessage());
 
 				// rename tempfolder
 				tempFolder.renameTo(new File(tempFolder.getAbsolutePath() + "_failed"));
@@ -477,7 +477,7 @@ public class BulkFileLoader {
 			// copy all files into new failed folder
 
 			for (String folderName : failedBatchFolderNames) {
-				log("Reprocessing folder: " + folderName, Loglevel.NORMAL);
+				logger.log(Level.FINE, "Reprocessing folder: " + folderName);
 				for (File f : new File(folderName).listFiles()) {
 					FileUtils.copyFileToDirectory(f, failedFolder);
 				}
@@ -513,7 +513,7 @@ public class BulkFileLoader {
 
 		File zippedBatch = new File(zipTarget);
 		if (zippedBatch.length() > MAXZIPPEDBATCHSIZE) {
-			log("Zipped batch over " + MAXZIPPEDBATCHSIZE + " byte size limit. Must split into smaller chunks.", Loglevel.NORMAL);
+			logger.log(Level.FINE, "Zipped batch over " + MAXZIPPEDBATCHSIZE + " byte size limit. Must split into smaller chunks.");
 			// remove old zip file
 			zippedBatch.delete();
 			return null;
@@ -536,20 +536,19 @@ public class BulkFileLoader {
 					TimeUnit.MILLISECONDS.toMinutes(millisRemaining) - TimeUnit.HOURS.toMinutes(TimeUnit.MILLISECONDS.toHours(millisRemaining)),
 					TimeUnit.MILLISECONDS.toSeconds(millisRemaining)
 					- TimeUnit.MINUTES.toSeconds(TimeUnit.MILLISECONDS.toMinutes(millisRemaining)));
-			log("Created batch " + batchNumber + " ID: " + b.getId() + " " + Paths.get(zipTarget).getFileName() + " files: " + filesCount 
+			logger.log(Level.INFO, "Created batch " + batchNumber + " ID: " + b.getId() + " " + Paths.get(zipTarget).getFileName() + " files: " + filesCount 
 					+ " data: " + String.format("%.2f", ((float)size)/1024/1024) + " Mb"
 					+ " Total Files: " + totalFiles + " / " + totalToProcess + " (" + String.format("%.2f", (float) (((float)totalFiles*100)/totalToProcess)) + "%) "
 					+ " Total Data: " + String.format("%.2f", ((float)totalProcessedBytes)/1024/1024) + " / " + String.format("%.2f", ((float)totalToProcessBytes)/1024/1024) + " Mb ("
 					+ String.format("%.2f",  ((((float)totalProcessedBytes/1024/1024)*100)/((float)totalToProcessBytes/1024/1024))) + "%)"
-					+ " Elapsed: " + hmsElapsed + " ETC: " + hms 
-					, Loglevel.BRIEF);
+					+ " Elapsed: " + hmsElapsed + " ETC: " + hms);
 
 			int compressedSizeOfThisZip = (int) new File(zipTarget).length();
 			compressedSize += compressedSizeOfThisZip;
 			uncompressedSize += size;
-			log("Compression ratio now: " + String.format("%.2f",getCompressionRatio()), Loglevel.NORMAL);
-			log("Total files tried so far: " + totalFiles + " uploaded: " + totalFilesSent + " last batch size uncompressed: " + String.format("%,d",size)
-			+ " bytes, compressed: " + String.format("%,d", compressedSizeOfThisZip) + " ratio: " + String.format("%.2f", (float)compressedSizeOfThisZip/size), Loglevel.NORMAL);
+			logger.log(Level.FINE, "Compression ratio now: " + String.format("%.2f",getCompressionRatio()));
+			logger.log(Level.FINE, "Total files tried so far: " + totalFiles + " uploaded: " + totalFilesSent + " last batch size uncompressed: " + String.format("%,d",size)
+			+ " bytes, compressed: " + String.format("%,d", compressedSizeOfThisZip) + " ratio: " + String.format("%.2f", (float)compressedSizeOfThisZip/size));
 			return b;
 		}
 	}
@@ -568,7 +567,7 @@ public class BulkFileLoader {
 			fii.setFileNumber(fileCounter);
 			fii.setSourceFilePath(f.getAbsolutePath());
 			fii.setSize(f.length());
-			fileInventoryByNumber.put(fileCounter++, fii);
+			fileInventoryByNumber.add(fileCounter++, fii);
 			fileInventoryBySourceName.put(f.getAbsolutePath(), fii);
 			totalToProcess++;
 			totalToProcessBytes += f.length();
@@ -593,7 +592,7 @@ public class BulkFileLoader {
 		//System.out.println(job);
 		return job;
 	}
-	
+
 	/*
 	 * 
 	 * Method sorts the entire file inventory using bin sort algorithm
@@ -604,7 +603,7 @@ public class BulkFileLoader {
 	private void doBinSort() {
 		long startTime = startTiming();
 		int oversizeCount = 0;
-		for (FileInventoryItem fii : fileInventoryByNumber.values()) {
+		for (FileInventoryItem fii : fileInventoryByNumber) {
 			long size = fii.getSize();
 			if (fii.getSize() > MAXSINGLEFILELENGTH) {
 				// TODO: we should move off into FailedFiles right away
@@ -615,7 +614,7 @@ public class BulkFileLoader {
 				b.isOversizeBin = true;
 				b.totalSize += size;
 				b.binFiles ++;
-				batchBins.add(batchBins.size()-1, b);
+				batchBins.add((batchBins.size()-1 < 0 ? 0 : batchBins.size()-1), b);
 				continue;
 			} else {
 				boolean binFound = false;
@@ -637,29 +636,29 @@ public class BulkFileLoader {
 				}
 			}
 		}
-		log("Batches: " + batchBins.size() + " of which oversize: " + oversizeCount, Loglevel.BRIEF);
-		endTiming(startTime, "Bin sort", Loglevel.BRIEF);
+		logger.log(Level.INFO, "Batches: " + batchBins.size() + " of which oversize: " + oversizeCount);
+		endTiming(startTime, "Bin sort", Level.INFO);
 		long counter = 1;
 		long totalSize = 0;
 		for (BatchBin b : batchBins) {
-			log("Batch " + counter++ + " files: " + b.fileList.size() + " total size: " + b.totalSize + " bytes", Loglevel.NORMAL);
+			logger.log(Level.FINE, "Batch " + counter++ + " files: " + b.fileList.size() + " total size: " + b.totalSize + " bytes");
 			totalSize += b.totalSize;
 		}
-		log("Total file size: " + String.format("%,d", totalSize) + " bytes", Loglevel.NORMAL);
+		logger.log(Level.FINE, "Total file size: " + String.format("%,d", totalSize) + " bytes");
 	}
 
 	private void endTiming(long startTime, String message) {
-		endTiming(startTime, message, Loglevel.NORMAL);
+		endTiming(startTime, message, Level.FINE);
 	}
 
-	private void endTiming(long startTime, String message, Loglevel level) {
+	private void endTiming(long startTime, String message, Level level) {
 		final long end = System.currentTimeMillis();
 		final long diff = ((end - startTime));
 		final String hms = String.format("%02d:%02d:%02d", TimeUnit.MILLISECONDS.toHours(diff),
 				TimeUnit.MILLISECONDS.toMinutes(diff) - TimeUnit.HOURS.toMinutes(TimeUnit.MILLISECONDS.toHours(diff)),
 				TimeUnit.MILLISECONDS.toSeconds(diff)
 				- TimeUnit.MINUTES.toSeconds(TimeUnit.MILLISECONDS.toMinutes(diff)));
-		this.log(message + " duration: " + hms, level);
+		logger.log(level, message + " duration: " + hms);
 	}
 
 	private void finishABatch(JobInfo myJob, File tempFolder, String batchPrefix, Integer tempFolderCounter2,
@@ -710,7 +709,7 @@ public class BulkFileLoader {
 	}
 
 	private void getContentDocumentIDsForBatch(BatchInfo b) throws ConnectionException {
-		log("Looking for contentDocumentIDs for batch" + b.getId(), Loglevel.NORMAL);
+		logger.log(Level.FINE, "Looking for contentDocumentIDs for batch" + b.getId());
 		// find the right batch to populate IDs for
 		List<FileInventoryItem> batchFileList = batchInventoryMapByBatchId.get(b.getId());
 
@@ -742,9 +741,9 @@ public class BulkFileLoader {
 
 
 		// build the query (-ies)
-		
+
 		List<String> queries = new ArrayList<String>();
-		
+
 
 		final String queryStart = "SELECT ContentDocumentId,Id,Title FROM ContentVersion WHERE ID IN(";
 		final String queryEnd = ")";
@@ -752,7 +751,7 @@ public class BulkFileLoader {
 		String queryMid = "'" + String.join("','", myIDs)+ "'";
 
 		final String query = queryStart + queryMid + queryEnd;
-		
+
 		if (query.length() > 19999) {// SOQL query length limit
 			// split the array in two, do two queries
 			List<String> IDList = new ArrayList<String>(cvIDs);
@@ -763,9 +762,9 @@ public class BulkFileLoader {
 		} else {
 			queries.add(query);
 		}
-			
-		log("Looking for contentDocumentIDs for " + cvIDs.size() + " documents.", Loglevel.NORMAL);
-		log("Query: " + query, Loglevel.NORMAL);
+
+		logger.log(Level.FINE, "Looking for contentDocumentIDs for " + cvIDs.size() + " documents.");
+		logger.log(Level.FINE, "Query: " + query);
 
 		// run the query
 
@@ -775,7 +774,7 @@ public class BulkFileLoader {
 
 			boolean done = false;
 			if (qResult.getSize() > 0) {
-				log("Found " + qResult.getSize() + " documents.", Loglevel.NORMAL);
+				logger.log(Level.FINE, "Found " + qResult.getSize() + " documents.");
 				while (!done) {
 					final SObject[] records = qResult.getRecords();
 					for (final SObject o : records) {
@@ -827,7 +826,7 @@ public class BulkFileLoader {
 	//		return bulkConnection.createBatchWithInputStreamAttachments(job, Files.newInputStream(newCsv), attachments);
 	//	}
 
-	private File getSafeFilename(File file) {
+	public static File getSafeFilename(File file) {
 		if (file.exists()) {
 			String name = file.getName();
 			// append a counter to the name just before the suffix
@@ -845,16 +844,10 @@ public class BulkFileLoader {
 		} else return file;
 	}
 
-	private void log(final String logText, final Loglevel level) {
-		if ((this.loglevel == null) || (level.getLevel() <= this.loglevel.getLevel())) {
-			System.out.println(logText);
-		}
-	}
 	public void run() throws RemoteException, Exception {
 		JobInfo myJob = null;
 		try {
-			// set loglevel based on parameters
-			this.loglevel = ("verbose".equals(this.parameters.get("loglevel"))) ? Loglevel.NORMAL : Loglevel.BRIEF;
+			setupLogging();
 
 			maxRequestSize = Integer.valueOf(this.parameters.get(BulkFileLoaderCommandLine.MAXREQUESTSIZE_LONGNAME));
 			if (maxRequestSize < 1) {
@@ -885,9 +878,7 @@ public class BulkFileLoader {
 
 			// create job
 
-
-
-			 myJob = createJob(bulkConnection);
+			myJob = createJob(bulkConnection);
 
 			// create batches from directory
 
@@ -899,9 +890,9 @@ public class BulkFileLoader {
 
 			// await completion
 
-			log("******************************************************", Loglevel.BRIEF);
-			log("*       Batch Results                          *", Loglevel.BRIEF);
-			log("******************************************************", Loglevel.BRIEF);
+			logger.log(Level.INFO, "******************************************************");
+			logger.log(Level.INFO, "*       Batch Results                          *");
+			logger.log(Level.INFO, "******************************************************");
 
 			awaitCompletion(bulkConnection, myJob, batchInfos);
 
@@ -909,22 +900,40 @@ public class BulkFileLoader {
 
 			checkResults(bulkConnection, myJob, batchInfos);
 
+			uploadTooLargeFiles();
+			
 			writeResultsFile();
 
-			endTiming(this.startTime, "Overall operation", Loglevel.BRIEF);
-			log("Number of batches too big:" + (tooBigFolderCounter - 1), Loglevel.BRIEF);
-			log("Uncompressed size:" + String.format("%,d", (int)uncompressedSize) + " bytes", Loglevel.BRIEF);
-			log("Compressed size:" + String.format("%,d", (int)compressedSize) + " bytes", Loglevel.BRIEF);
-			log("Overall compression ratio:" + String.format("%.2f", getCompressionRatio()), Loglevel.BRIEF);
-			log("Rate:" + String.format("%.2f", uncompressedSize/1024/1024/((System.currentTimeMillis()-startTime)/1000)) + "Mb/s", Loglevel.BRIEF);
+			endTiming(this.startTime, "Overall operation", Level.INFO);
+			logger.log(Level.INFO, "Number of batches too big:" + (tooBigFolderCounter - 1));
+			logger.log(Level.INFO, "Uncompressed size:" + String.format("%,d", (int)uncompressedSize) + " bytes");
+			logger.log(Level.INFO, "Compressed size:" + String.format("%,d", (int)compressedSize) + " bytes");
+			logger.log(Level.INFO, "Overall compression ratio:" + String.format("%.2f", getCompressionRatio()));
+			logger.log(Level.INFO, "Rate:" + String.format("%.2f", uncompressedSize/1024/1024/((System.currentTimeMillis()-startTime)/1000)) + "Mb/s");
 		} catch (Exception e) {
 			e.printStackTrace();
-		} finally {
+		} 
+
+		try {
 			if (myJob != null && myJob.getState() != com.sforce.async.JobStateEnum.Closed) {
 				bulkConnection.closeJob(myJob.getId());
 			}
+		} catch (Exception e) {
+			// we don't care - at least we tried
 		}
 
+	}
+
+	private void setupLogging() throws SecurityException {
+		// set loglevel based on parameters
+		this.loglevel = ("verbose".equals(this.parameters.get("loglevel"))) ? Level.FINE : Level.INFO;
+		this.logger.setLevel(loglevel);
+		this.logger.setUseParentHandlers(false);
+		final LogFormatter formatter = new LogFormatter();
+		final ConsoleHandler handler = new ConsoleHandler();
+		handler.setFormatter(formatter);
+		handler.setLevel(loglevel);
+		this.logger.addHandler(handler);
 	}
 
 	private void setupBasicStuff() throws IOException {
@@ -941,15 +950,28 @@ public class BulkFileLoader {
 			failedFolder.mkdirs();
 		}
 
+		successSingleFileFolder = new File(tmpFolder + File.separator + "SuccessSingleFIles");
+		if (!failedFolder.exists()) {
+			failedFolder.mkdirs();
+		}
+
 	}
 
 	private long startTiming() {
 		return System.currentTimeMillis();
 	}
 
+	private void uploadTooLargeFiles() throws IOException {
+		ChatterRESTFileUploader uploader = new ChatterRESTFileUploader(failedFileInventoryList, successSingleFileFolder, partnerConnection, logger);
+		uploader.run();	
+	}
+
 	private void writeResultsFile() throws IOException {
 		// initialize output file
 		String outputFilename = srcFolder + File.separator + "output.csv";	
+		
+		logger.log(Level.INFO, "Writing results file to: " + outputFilename);
+		
 		BufferedWriter bw = new BufferedWriter(new FileWriter(outputFilename));
 
 		// write output file into source folder
@@ -957,7 +979,7 @@ public class BulkFileLoader {
 		bw.write(headerRow);
 		bw.newLine();
 
-		for (FileInventoryItem fii : completeFileList) {
+		for (FileInventoryItem fii : fileInventoryByNumber) {
 			bw.write(fii.getOutputLine());
 			bw.newLine();
 		}

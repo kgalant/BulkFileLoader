@@ -15,7 +15,7 @@ import org.apache.commons.cli.ParseException;
 
 import com.kgal.bulkfileloader.BulkFileLoader;
 import com.kgal.bulkfileloader.BulkFileLoaderCommandLine;
-import com.salesforce.migrationtoolutils.Utils;
+import com.kgal.bulkfileloader.Utils;
 
 public class BulkFileLoaderCommandLine {
 	// command line static strings

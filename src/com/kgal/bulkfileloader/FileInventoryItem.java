@@ -86,7 +86,7 @@ public class FileInventoryItem {
 	 */
 
 	public String getOutputLine() {
-		String line = contentVersionID + "," + sourceFilePath + "," + tempFilePath + "," + contentDocumentID + "," + (success ? "true" : "false") + "," + error;
+		String line = contentVersionID + ",\"" + sourceFilePath + "\",\"" + tempFilePath + "\"," + contentDocumentID + "," + (success ? "true" : "false") + ",\"" + error + "\"";
 		return line;
 	}
 
