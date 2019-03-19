@@ -47,14 +47,14 @@ public class BulkFileLoader {
 
 	public static final int     MAXREQUESTSIZE      = 20920000;
 	public static final int     MAXZIPPEDBATCHSIZE      = 10000000;
-	
+
 	public static final double   API_VERSION            = 45.0;;
 
 
 	private static final String  URLBASE                = "/services/Soap/u/";
 
 	private static final String  BATCHFOLDERPREFIX		= "Batch_";
-	private static final long MAXSINGLEFILELENGTH = 10485760;
+	private static final long MAXSINGLEFILELENGTH = 10000000;
 	private static final int MAXFILESPERBATCH = 998;
 	// Logging
 	private final Logger logger = Logger.getLogger(Logger.GLOBAL_LOGGER_NAME);
@@ -72,7 +72,7 @@ public class BulkFileLoader {
 	private PartnerConnection 					partnerConnection = null;
 	private String srcFolder;
 	private String tmpFolder;
-//	private boolean failsReprocessed = false;
+	//	private boolean failsReprocessed = false;
 	private Integer tempFolderCounter = 1;
 	private Integer tooBigFolderCounter = 1;
 	private int totalFiles = 0;
@@ -336,175 +336,175 @@ public class BulkFileLoader {
 		return batchInfos;
 	}
 
-//	private ArrayList<BatchInfo> createBatchesFromDirectory(JobInfo myJob, String sourceDirectory, String batchPrefix, boolean moveFiles, int maxNumberOfFilesInBatch, int currentMaxRequestSize) throws IOException {
-//		//// open directory
-//		//// iterate over files until we hit capacity limit, build request.txt as we go
-//
-//		File myDirectory = new File(sourceDirectory);
-//		//		ArrayList<File> myFiles = new ArrayList<File>(Arrays.asList(myDirectory.listFiles()));
-//		Collection<File> myFiles = FileUtils.listFiles(myDirectory, null, true);
-//
-//		ArrayList<BatchInfo> batchInfos = new ArrayList<BatchInfo>();
-//
-//		ArrayList<String> failedBatchFolderNames = new ArrayList<String>();
-//
-//		Iterator<File> i = myFiles.iterator();
-//
-//		File tempFolder = null;
-//		Integer numFiles = 0;
-//
-//
-//
-//		// initialize first temp folder, variables
-//		final String headerRow = "Title,Description,VersionData,PathOnClient";
-//
-//		// reinitialize temp folder, variables
-//		numFiles = 0;
-//		int bytesLeft = currentMaxRequestSize;
-//
-//		ArrayList<String> requesttxt = new ArrayList<String>();
-//		ArrayList<FileInventoryItem> filesInThisBatch = new ArrayList<FileInventoryItem>();
-//		requesttxt.add(headerRow);
-//		bytesLeft -= (headerRow.length() + 2); // adding space for CRLF 
-//		tempFolder = new File(tmpFolder + File.separator + batchPrefix + tempFolderCounter);
-//		FileUtils.deleteDirectory(tempFolder);
-//		tempFolder.mkdirs();
-//		logger.log(Level.FINE, "Created batch folder: " + tempFolder.getAbsolutePath());
-//
-//		// set up where fails go
-//
-//
-//		while (i.hasNext()) {
-//			File f = i.next();
-//
-//			// locate it in inventory
-//			FileInventoryItem fii = fileInventoryBySourceName.get(f.getAbsolutePath());
-//			if (fii == null) {
-//				fii = fileInventoryByTempName.get(f.getAbsolutePath());
-//			}
-//
-//			if (fii == null) {
-//				File failedFile = new File(failedFolder.toString() + File.separator + f.getName());
-//				f.renameTo(failedFile);
-//				logger.log(Level.INFO, "File " + f.getAbsolutePath() + " not found in inventory - something is wrong. Moving to failed: " + failedFile.getAbsolutePath());
-//				continue;
-//			}
-//
-//			if (f.length() > currentMaxRequestSize || f.length() == 0 || f.length() > MAXSINGLEFILELENGTH) {
-//				// file too big altogether, stop processing
-//				File failedFile = new File(failedFolder.toString() + File.separator + f.getName());
-//				f.renameTo(failedFile);
-//				logger.log(Level.INFO, "File " + f.getAbsolutePath() + " (size " + f.length() + " bytes) is too big or has size 0, cannot continue. Moving to failed: " + failedFile.getAbsolutePath());
-//				continue;
-//			} else if (f.length() * getCompressionRatio() > bytesLeft || numFiles > maxNumberOfFilesInBatch){
-//				// finish processing this batch
-//				// write request.txt into temp folder
-//				String requestFilename = tempFolder + File.separator + "request.txt";	
-//				Utils.writeFile(requestFilename, requesttxt);
-//				// now create batch out of temp folder
-//
-//				try {
-//					finishABatch(myJob,tempFolder, batchPrefix, tempFolderCounter, currentMaxRequestSize, batchInfos, filesInThisBatch, moveFiles, maxNumberOfFilesInBatch);
-//				} catch (AsyncApiException e) {
-//					logger.log(Level.FINE, "Tried to upload batch of size: " + (maxRequestSize - bytesLeft) + " files: " + numFiles + "but failed.");
-//					logger.log(Level.FINE, e.getMessage());
-//					System.out.println(e.getCause());
-//					System.out.println(e.getExceptionCode());
-//					System.out.println(e.getStackTrace());
-//					tempFolder.renameTo(new File(tempFolder.getAbsolutePath() + "_failed"));
-//					failedBatchFolderNames.add(tempFolder.getAbsolutePath() + "_failed");
-//				}
-//
-//				// now reinitialize everything for next batch
-//
-//				numFiles = 0;
-//				bytesLeft = maxRequestSize;
-//
-//				requesttxt.clear();
-//				requesttxt.add(headerRow);
-//				filesInThisBatch = new ArrayList<>();
-//				bytesLeft -= (headerRow.length() + 2); // adding space for CRLF 
-//				tempFolder = new File(tmpFolder + File.separator + batchPrefix + ++tempFolderCounter);
-//				tempFolder.mkdirs();
-//				logger.log(Level.FINE, "Created batch folder: " + tempFolder.getName());
-//
-//			}
-//			if (!f.isFile() || f.getName().startsWith(".")) { 
-//				continue;
-//			}
-//
-//			// move this file into the temp directory, but check if we have something of the same name there alredy,
-//			// if we do, rename
-//
-//			File targetFile = getSafeFilename(new File(tempFolder + File.separator + f.getName()));
-//			if (this.parameters.containsKey(BulkFileLoaderCommandLine.MOVEFILES_LONGNAME)) {
-//				FileUtils.moveFile(f, targetFile);
-//			} else {
-//				FileUtils.copyFile(f, targetFile);				
-//			}		
-//			fileInventoryByTempName.put(targetFile.getAbsolutePath(), fii);
-//			fii.setTempFilePath(targetFile.getAbsolutePath());
-//			fii.setBatchNumber(tempFolderCounter);
-//			fii.setNumberInBatch(numFiles++);
-//			filesInThisBatch.add(fii);
-//
-//			// deduct size of this file to keep track of what we have left
-//
-//			bytesLeft -= targetFile.length();
-//			// add to requesttxt
-//			String requestLine = 
-//					targetFile.getName().trim() + "," + 			// Title
-//							targetFile.getName().trim() + "," + 			// Description
-//							"#" + targetFile.getName().trim() + "," + 			// VersionData
-//							targetFile.getAbsolutePath();			// PathOnClient
-//			requesttxt.add(requestLine);
-//			bytesLeft -= (requestLine.length() + 2);	
-//			//				logger.log(Level.FINE, "Batch: " + tempFolderCounter + " adding file: " + targetFile.getName());
-//		}
-//
-//
-//		// now deal with any last batch
-//
-//		if (numFiles > 0) {
-//			// finish processing this batch
-//			// write request.txt into temp folder
-//			String requestFilename = tempFolder + File.separator + "request.txt";	
-//			Utils.writeFile(requestFilename, requesttxt);
-//			// now create batch out of temp folder
-//			try {
-//				finishABatch(myJob,tempFolder, batchPrefix, tempFolderCounter, currentMaxRequestSize, batchInfos, filesInThisBatch, moveFiles, maxNumberOfFilesInBatch);
-//			} catch (AsyncApiException e) {
-//				logger.log(Level.INFO, e.getMessage());
-//
-//				// rename tempfolder
-//				tempFolder.renameTo(new File(tempFolder.getAbsolutePath() + "_failed"));
-//			}
-//
-//		}
-//
-//		// now repackage anything that failed into batches, try to reprocess
-//
-//		if (!failedBatchFolderNames.isEmpty() && !failsReprocessed) {
-//			failsReprocessed = true;
-//
-//			// copy all files into new failed folder
-//
-//			for (String folderName : failedBatchFolderNames) {
-//				logger.log(Level.FINE, "Reprocessing folder: " + folderName);
-//				for (File f : new File(folderName).listFiles()) {
-//					FileUtils.copyFileToDirectory(f, failedFolder);
-//				}
-//			}
-//
-//			// reprocess fails folder
-//
-//			batchInfos.addAll(createBatchesFromDirectory(myJob, failedFolder.getAbsolutePath(), "Failed_", true, 20, currentMaxRequestSize));
-//
-//		}
-//
-//
-//		return batchInfos;
-//	}
+	//	private ArrayList<BatchInfo> createBatchesFromDirectory(JobInfo myJob, String sourceDirectory, String batchPrefix, boolean moveFiles, int maxNumberOfFilesInBatch, int currentMaxRequestSize) throws IOException {
+	//		//// open directory
+	//		//// iterate over files until we hit capacity limit, build request.txt as we go
+	//
+	//		File myDirectory = new File(sourceDirectory);
+	//		//		ArrayList<File> myFiles = new ArrayList<File>(Arrays.asList(myDirectory.listFiles()));
+	//		Collection<File> myFiles = FileUtils.listFiles(myDirectory, null, true);
+	//
+	//		ArrayList<BatchInfo> batchInfos = new ArrayList<BatchInfo>();
+	//
+	//		ArrayList<String> failedBatchFolderNames = new ArrayList<String>();
+	//
+	//		Iterator<File> i = myFiles.iterator();
+	//
+	//		File tempFolder = null;
+	//		Integer numFiles = 0;
+	//
+	//
+	//
+	//		// initialize first temp folder, variables
+	//		final String headerRow = "Title,Description,VersionData,PathOnClient";
+	//
+	//		// reinitialize temp folder, variables
+	//		numFiles = 0;
+	//		int bytesLeft = currentMaxRequestSize;
+	//
+	//		ArrayList<String> requesttxt = new ArrayList<String>();
+	//		ArrayList<FileInventoryItem> filesInThisBatch = new ArrayList<FileInventoryItem>();
+	//		requesttxt.add(headerRow);
+	//		bytesLeft -= (headerRow.length() + 2); // adding space for CRLF 
+	//		tempFolder = new File(tmpFolder + File.separator + batchPrefix + tempFolderCounter);
+	//		FileUtils.deleteDirectory(tempFolder);
+	//		tempFolder.mkdirs();
+	//		logger.log(Level.FINE, "Created batch folder: " + tempFolder.getAbsolutePath());
+	//
+	//		// set up where fails go
+	//
+	//
+	//		while (i.hasNext()) {
+	//			File f = i.next();
+	//
+	//			// locate it in inventory
+	//			FileInventoryItem fii = fileInventoryBySourceName.get(f.getAbsolutePath());
+	//			if (fii == null) {
+	//				fii = fileInventoryByTempName.get(f.getAbsolutePath());
+	//			}
+	//
+	//			if (fii == null) {
+	//				File failedFile = new File(failedFolder.toString() + File.separator + f.getName());
+	//				f.renameTo(failedFile);
+	//				logger.log(Level.INFO, "File " + f.getAbsolutePath() + " not found in inventory - something is wrong. Moving to failed: " + failedFile.getAbsolutePath());
+	//				continue;
+	//			}
+	//
+	//			if (f.length() > currentMaxRequestSize || f.length() == 0 || f.length() > MAXSINGLEFILELENGTH) {
+	//				// file too big altogether, stop processing
+	//				File failedFile = new File(failedFolder.toString() + File.separator + f.getName());
+	//				f.renameTo(failedFile);
+	//				logger.log(Level.INFO, "File " + f.getAbsolutePath() + " (size " + f.length() + " bytes) is too big or has size 0, cannot continue. Moving to failed: " + failedFile.getAbsolutePath());
+	//				continue;
+	//			} else if (f.length() * getCompressionRatio() > bytesLeft || numFiles > maxNumberOfFilesInBatch){
+	//				// finish processing this batch
+	//				// write request.txt into temp folder
+	//				String requestFilename = tempFolder + File.separator + "request.txt";	
+	//				Utils.writeFile(requestFilename, requesttxt);
+	//				// now create batch out of temp folder
+	//
+	//				try {
+	//					finishABatch(myJob,tempFolder, batchPrefix, tempFolderCounter, currentMaxRequestSize, batchInfos, filesInThisBatch, moveFiles, maxNumberOfFilesInBatch);
+	//				} catch (AsyncApiException e) {
+	//					logger.log(Level.FINE, "Tried to upload batch of size: " + (maxRequestSize - bytesLeft) + " files: " + numFiles + "but failed.");
+	//					logger.log(Level.FINE, e.getMessage());
+	//					System.out.println(e.getCause());
+	//					System.out.println(e.getExceptionCode());
+	//					System.out.println(e.getStackTrace());
+	//					tempFolder.renameTo(new File(tempFolder.getAbsolutePath() + "_failed"));
+	//					failedBatchFolderNames.add(tempFolder.getAbsolutePath() + "_failed");
+	//				}
+	//
+	//				// now reinitialize everything for next batch
+	//
+	//				numFiles = 0;
+	//				bytesLeft = maxRequestSize;
+	//
+	//				requesttxt.clear();
+	//				requesttxt.add(headerRow);
+	//				filesInThisBatch = new ArrayList<>();
+	//				bytesLeft -= (headerRow.length() + 2); // adding space for CRLF 
+	//				tempFolder = new File(tmpFolder + File.separator + batchPrefix + ++tempFolderCounter);
+	//				tempFolder.mkdirs();
+	//				logger.log(Level.FINE, "Created batch folder: " + tempFolder.getName());
+	//
+	//			}
+	//			if (!f.isFile() || f.getName().startsWith(".")) { 
+	//				continue;
+	//			}
+	//
+	//			// move this file into the temp directory, but check if we have something of the same name there alredy,
+	//			// if we do, rename
+	//
+	//			File targetFile = getSafeFilename(new File(tempFolder + File.separator + f.getName()));
+	//			if (this.parameters.containsKey(BulkFileLoaderCommandLine.MOVEFILES_LONGNAME)) {
+	//				FileUtils.moveFile(f, targetFile);
+	//			} else {
+	//				FileUtils.copyFile(f, targetFile);				
+	//			}		
+	//			fileInventoryByTempName.put(targetFile.getAbsolutePath(), fii);
+	//			fii.setTempFilePath(targetFile.getAbsolutePath());
+	//			fii.setBatchNumber(tempFolderCounter);
+	//			fii.setNumberInBatch(numFiles++);
+	//			filesInThisBatch.add(fii);
+	//
+	//			// deduct size of this file to keep track of what we have left
+	//
+	//			bytesLeft -= targetFile.length();
+	//			// add to requesttxt
+	//			String requestLine = 
+	//					targetFile.getName().trim() + "," + 			// Title
+	//							targetFile.getName().trim() + "," + 			// Description
+	//							"#" + targetFile.getName().trim() + "," + 			// VersionData
+	//							targetFile.getAbsolutePath();			// PathOnClient
+	//			requesttxt.add(requestLine);
+	//			bytesLeft -= (requestLine.length() + 2);	
+	//			//				logger.log(Level.FINE, "Batch: " + tempFolderCounter + " adding file: " + targetFile.getName());
+	//		}
+	//
+	//
+	//		// now deal with any last batch
+	//
+	//		if (numFiles > 0) {
+	//			// finish processing this batch
+	//			// write request.txt into temp folder
+	//			String requestFilename = tempFolder + File.separator + "request.txt";	
+	//			Utils.writeFile(requestFilename, requesttxt);
+	//			// now create batch out of temp folder
+	//			try {
+	//				finishABatch(myJob,tempFolder, batchPrefix, tempFolderCounter, currentMaxRequestSize, batchInfos, filesInThisBatch, moveFiles, maxNumberOfFilesInBatch);
+	//			} catch (AsyncApiException e) {
+	//				logger.log(Level.INFO, e.getMessage());
+	//
+	//				// rename tempfolder
+	//				tempFolder.renameTo(new File(tempFolder.getAbsolutePath() + "_failed"));
+	//			}
+	//
+	//		}
+	//
+	//		// now repackage anything that failed into batches, try to reprocess
+	//
+	//		if (!failedBatchFolderNames.isEmpty() && !failsReprocessed) {
+	//			failsReprocessed = true;
+	//
+	//			// copy all files into new failed folder
+	//
+	//			for (String folderName : failedBatchFolderNames) {
+	//				logger.log(Level.FINE, "Reprocessing folder: " + folderName);
+	//				for (File f : new File(folderName).listFiles()) {
+	//					FileUtils.copyFileToDirectory(f, failedFolder);
+	//				}
+	//			}
+	//
+	//			// reprocess fails folder
+	//
+	//			batchInfos.addAll(createBatchesFromDirectory(myJob, failedFolder.getAbsolutePath(), "Failed_", true, 20, currentMaxRequestSize));
+	//
+	//		}
+	//
+	//
+	//		return batchInfos;
+	//	}
 
 	private BatchInfo createBatchFromZippedDirectory(JobInfo job, Path fileDir, String batchFilenamePrefix, int batchNumber, int currentMaxSize)
 			throws AsyncApiException, IOException
@@ -605,7 +605,7 @@ public class BulkFileLoader {
 		//System.out.println(job);
 		return job;
 	}
-	
+
 	/*
 	 * 
 	 * Method sorts the entire file inventory using bin sort algorithm
@@ -693,7 +693,7 @@ public class BulkFileLoader {
 
 			logger.log(Level.INFO, "Something unexpected happened, so batch " + tempFolderCounter2 
 					+ " failed. Moving files to failed, and will retry uploading them individually.");
-			
+
 			// remove request.txt file
 			FileUtils.deleteQuietly(new File(tempFolder.getAbsoluteFile() + File.separator + "request.txt"));
 
@@ -767,15 +767,7 @@ public class BulkFileLoader {
 
 		final Map<String, String> contentDocumentsMapByCVID = new HashMap<>();
 
-		// login if needed 
 
-		if (partnerConnection == null) {
-			partnerConnection = LoginUtil.soapLogin(
-					this.parameters.get(BulkFileLoaderCommandLine.SERVERURL_LONGNAME) + BulkFileLoader.URLBASE + this.myApiVersion,
-					this.parameters.get(BulkFileLoaderCommandLine.USERNAME_LONGNAME),
-					this.parameters.get(BulkFileLoaderCommandLine.PASSWORD_LONGNAME)
-					);
-		}
 
 
 		// build the query (-ies)
@@ -838,13 +830,13 @@ public class BulkFileLoader {
 	}
 
 	public void run() throws RemoteException, Exception {
-		
 
-		
+
+
 		JobInfo myJob = null;
 		try {
 			setupLogging();
-			
+
 			maxRequestSize = Integer.valueOf(this.parameters.get(BulkFileLoaderCommandLine.MAXREQUESTSIZE_LONGNAME));
 			if (maxRequestSize < 1) {
 				maxRequestSize = MAXREQUESTSIZE;
@@ -862,15 +854,6 @@ public class BulkFileLoader {
 
 			createFileInventory(srcFolder);
 			doBinSort();
-
-			// get connection
-
-			bulkConnection = LoginUtil.getBulkConnection(
-					this.parameters.get(BulkFileLoaderCommandLine.SERVERURL_LONGNAME) + BulkFileLoader.URLBASE + this.myApiVersion,
-					this.parameters.get(BulkFileLoaderCommandLine.USERNAME_LONGNAME),
-					this.parameters.get(BulkFileLoaderCommandLine.PASSWORD_LONGNAME),
-					String.valueOf(this.myApiVersion)
-					);
 
 			// create job
 
@@ -897,7 +880,7 @@ public class BulkFileLoader {
 			checkResults(bulkConnection, myJob, batchInfos);
 
 			uploadTooLargeFiles();
-			
+
 			writeResultsFile();
 
 			endTiming(this.startTime, "Overall operation", Level.INFO);
@@ -920,7 +903,7 @@ public class BulkFileLoader {
 
 	}
 
-	private void setupBasicStuff() throws IOException {
+	private void setupBasicStuff() throws IOException, ConnectionException, AsyncApiException {
 
 		this.srcFolder = this.parameters.get(BulkFileLoaderCommandLine.BASEDIRECTORY_LONGNAME);
 		this.tmpFolder = this.parameters.get(BulkFileLoaderCommandLine.TEMPDIRECTORY_LONGNAME);
@@ -938,6 +921,27 @@ public class BulkFileLoader {
 		if (!failedFolder.exists()) {
 			failedFolder.mkdirs();
 		}
+
+		// set up connections
+
+		// login if needed 
+
+		if (partnerConnection == null) {
+			partnerConnection = LoginUtil.soapLogin(
+					this.parameters.get(BulkFileLoaderCommandLine.SERVERURL_LONGNAME) + BulkFileLoader.URLBASE + this.myApiVersion,
+					this.parameters.get(BulkFileLoaderCommandLine.USERNAME_LONGNAME),
+					this.parameters.get(BulkFileLoaderCommandLine.PASSWORD_LONGNAME)
+					);
+		}
+
+		// get connection
+
+		bulkConnection = LoginUtil.getBulkConnection(
+				this.parameters.get(BulkFileLoaderCommandLine.SERVERURL_LONGNAME) + BulkFileLoader.URLBASE + this.myApiVersion,
+				this.parameters.get(BulkFileLoaderCommandLine.USERNAME_LONGNAME),
+				this.parameters.get(BulkFileLoaderCommandLine.PASSWORD_LONGNAME),
+				String.valueOf(this.myApiVersion)
+				);
 
 	}
 
@@ -965,9 +969,9 @@ public class BulkFileLoader {
 	private void writeResultsFile() throws IOException {
 		// initialize output file
 		String outputFilename = srcFolder + File.separator + "output.csv";	
-		
+
 		logger.log(Level.INFO, "Writing results file to: " + outputFilename);
-		
+
 		BufferedWriter bw = new BufferedWriter(new FileWriter(outputFilename));
 
 		// write output file into source folder
