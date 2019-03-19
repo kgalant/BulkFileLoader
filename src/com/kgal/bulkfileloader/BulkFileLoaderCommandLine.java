@@ -1,5 +1,9 @@
 package com.kgal.bulkfileloader;
 
+import java.io.File;
+import java.io.FileReader;
+import java.io.IOException;
+import java.io.InputStreamReader;
 import java.rmi.RemoteException;
 import java.util.HashMap;
 import java.util.Map;
@@ -12,6 +16,9 @@ import org.apache.commons.cli.HelpFormatter;
 import org.apache.commons.cli.Option;
 import org.apache.commons.cli.Options;
 import org.apache.commons.cli.ParseException;
+import org.apache.maven.model.Model;
+import org.apache.maven.model.io.xpp3.MavenXpp3Reader;
+import org.codehaus.plexus.util.xml.pull.XmlPullParserException;
 
 import com.kgal.bulkfileloader.BulkFileLoader;
 import com.kgal.bulkfileloader.BulkFileLoaderCommandLine;
@@ -48,6 +55,7 @@ public class BulkFileLoaderCommandLine {
 	 * @throws RemoteException
 	 */
 	public static void main(final String[] args) throws RemoteException, Exception {
+		displayVersionNumber();
 		final BulkFileLoaderCommandLine pbc = new BulkFileLoaderCommandLine();
 
 		if (pbc.parseCommandLine(args)) {
@@ -292,5 +300,22 @@ public class BulkFileLoaderCommandLine {
 		this.options.addOption(Option.builder(VERBOSE).longOpt(VERBOSE_LONGNAME)
 				.desc("output verbose logging instead of just core output")
 				.build());
+	}
+	
+	private static void displayVersionNumber() throws IOException, XmlPullParserException {
+		MavenXpp3Reader reader = new MavenXpp3Reader();
+	    Model model;
+	    if ((new File("pom.xml")).exists())
+	      model = reader.read(new FileReader("pom.xml"));
+	    else
+	      model = reader.read(
+	        new InputStreamReader(
+	          BulkFileLoaderCommandLine.class.getResourceAsStream(
+	            "/META-INF/maven/com.kgal/BulkFileLoader/pom.xml"
+	          )
+	        )
+	      );
+	    System.out.println(model.getArtifactId() + " " + model.getVersion());
+		
 	}
 }

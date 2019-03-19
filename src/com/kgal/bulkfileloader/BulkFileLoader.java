@@ -45,26 +45,21 @@ import com.sforce.ws.ConnectionException;
 
 public class BulkFileLoader {
 
-	// Logging
-	private final Logger logger = Logger.getLogger(Logger.GLOBAL_LOGGER_NAME);
-	private Level loglevel;
-	
-	public static final int     MAXREQUESTSIZE      = 20920000;;
-
-
+	public static final int     MAXREQUESTSIZE      = 20920000;
 	public static final int     MAXZIPPEDBATCHSIZE      = 10000000;
+	
+	public static final double   API_VERSION            = 45.0;;
 
-	public static final double   API_VERSION            = 45.0;
+
 	private static final String  URLBASE                = "/services/Soap/u/";
+
 	private static final String  BATCHFOLDERPREFIX		= "Batch_";
 	private static final long MAXSINGLEFILELENGTH = 10485760;
-
-
 	private static final int MAXFILESPERBATCH = 998;
-	public static void main(String[] args) {
-		// TODO Auto-generated method stub
+	// Logging
+	private final Logger logger = Logger.getLogger(Logger.GLOBAL_LOGGER_NAME);
 
-	}
+	private Level loglevel;
 
 
 	private double                                  myApiVersion;
@@ -106,6 +101,24 @@ public class BulkFileLoader {
 
 
 	private File successSingleFileFolder;
+
+	public static File getSafeFilename(File file) {
+		if (file.exists()) {
+			String name = file.getName();
+			// append a counter to the name just before the suffix
+			// myfile.pdf -> myfile_1.pdf
+			// if no suffix, just append at the end
+			int fileExtensionStart = name.lastIndexOf(".");
+			String newName = null;
+			if (fileExtensionStart == -1) {
+				newName = name + "_1";
+			} else {
+				newName = name.replace(name.substring(fileExtensionStart), "_1" + name.substring(fileExtensionStart));
+			}
+			return getSafeFilename(new File(file.getParent() + File.separator + newName));
+
+		} else return file;
+	}
 
 	public BulkFileLoader(final Map<String, String> parameters) {
 		this.parameters.putAll(parameters);
@@ -218,7 +231,7 @@ public class BulkFileLoader {
 		// batchInfoList was populated when batches were created and submitted
 
 		logger.log(Level.INFO, "******************************************************");
-		logger.log(Level.INFO, "*       Job Results                          *");
+		logger.log(Level.INFO, "*       Job Results                             *");
 		logger.log(Level.INFO, "******************************************************");
 		logger.log(Level.INFO, "Total processed: " + totalProcessed + " Total successes: " + totalSuccesses + " Fails: " + totalFails);
 	}
@@ -592,7 +605,7 @@ public class BulkFileLoader {
 		//System.out.println(job);
 		return job;
 	}
-
+	
 	/*
 	 * 
 	 * Method sorts the entire file inventory using bin sort algorithm
@@ -700,6 +713,33 @@ public class BulkFileLoader {
 
 	}
 
+	//	private BatchInfo createBatchFromDirectory(JobInfo job, Path fileDir, int batchNumber)
+	//			throws AsyncApiException, IOException
+	//	{
+	//		String zipTarget = fileDir.getParent().toString() + File.separator + "batch_" + batchNumber + ".zip";
+	//		long startTime = startTiming();
+	//		Utils.zipIt(zipTarget, fileDir.toString());
+	//		endTiming(startTime, "Zip time");
+	//		startTime = startTiming();
+	//		BatchInfo b = bulkConnection.createBatchFromStream(job, Files.newInputStream(Paths.get(zipTarget)));
+	//		endTiming(startTime, "Upload time");
+	//		return b;
+	//	}
+	//
+	//	private BatchInfo createBatchFromFiles(JobInfo job, Path fileDir, Path newCsv)
+	//			throws AsyncApiException, IOException
+	//	{
+	//
+	//		Map<String, InputStream> attachments = new HashMap<>();
+	//		for (File f : fileDir.toFile().listFiles())
+	//		{
+	//			Path filePath = Paths.get(f.toURI());
+	//			attachments.put(f.getName(), Files.newInputStream(filePath));
+	//		}
+	//
+	//		return bulkConnection.createBatchWithInputStreamAttachments(job, Files.newInputStream(newCsv), attachments);
+	//	}
+
 	private double getCompressionRatio() {
 		if (uncompressedSize == 0.0 || compressedSize == 0.0) {
 			return averageCompressionRatio;
@@ -799,56 +839,14 @@ public class BulkFileLoader {
 
 	}
 
-	//	private BatchInfo createBatchFromDirectory(JobInfo job, Path fileDir, int batchNumber)
-	//			throws AsyncApiException, IOException
-	//	{
-	//		String zipTarget = fileDir.getParent().toString() + File.separator + "batch_" + batchNumber + ".zip";
-	//		long startTime = startTiming();
-	//		Utils.zipIt(zipTarget, fileDir.toString());
-	//		endTiming(startTime, "Zip time");
-	//		startTime = startTiming();
-	//		BatchInfo b = bulkConnection.createBatchFromStream(job, Files.newInputStream(Paths.get(zipTarget)));
-	//		endTiming(startTime, "Upload time");
-	//		return b;
-	//	}
-	//
-	//	private BatchInfo createBatchFromFiles(JobInfo job, Path fileDir, Path newCsv)
-	//			throws AsyncApiException, IOException
-	//	{
-	//
-	//		Map<String, InputStream> attachments = new HashMap<>();
-	//		for (File f : fileDir.toFile().listFiles())
-	//		{
-	//			Path filePath = Paths.get(f.toURI());
-	//			attachments.put(f.getName(), Files.newInputStream(filePath));
-	//		}
-	//
-	//		return bulkConnection.createBatchWithInputStreamAttachments(job, Files.newInputStream(newCsv), attachments);
-	//	}
-
-	public static File getSafeFilename(File file) {
-		if (file.exists()) {
-			String name = file.getName();
-			// append a counter to the name just before the suffix
-			// myfile.pdf -> myfile_1.pdf
-			// if no suffix, just append at the end
-			int fileExtensionStart = name.lastIndexOf(".");
-			String newName = null;
-			if (fileExtensionStart == -1) {
-				newName = name + "_1";
-			} else {
-				newName = name.replace(name.substring(fileExtensionStart), "_1" + name.substring(fileExtensionStart));
-			}
-			return getSafeFilename(new File(file.getParent() + File.separator + newName));
-
-		} else return file;
-	}
-
 	public void run() throws RemoteException, Exception {
+		
+
+		
 		JobInfo myJob = null;
 		try {
 			setupLogging();
-
+			
 			maxRequestSize = Integer.valueOf(this.parameters.get(BulkFileLoaderCommandLine.MAXREQUESTSIZE_LONGNAME));
 			if (maxRequestSize < 1) {
 				maxRequestSize = MAXREQUESTSIZE;
@@ -924,18 +922,6 @@ public class BulkFileLoader {
 
 	}
 
-	private void setupLogging() throws SecurityException {
-		// set loglevel based on parameters
-		this.loglevel = ("verbose".equals(this.parameters.get("loglevel"))) ? Level.FINE : Level.INFO;
-		this.logger.setLevel(loglevel);
-		this.logger.setUseParentHandlers(false);
-		final LogFormatter formatter = new LogFormatter();
-		final ConsoleHandler handler = new ConsoleHandler();
-		handler.setFormatter(formatter);
-		handler.setLevel(loglevel);
-		this.logger.addHandler(handler);
-	}
-
 	private void setupBasicStuff() throws IOException {
 
 		this.srcFolder = this.parameters.get(BulkFileLoaderCommandLine.BASEDIRECTORY_LONGNAME);
@@ -955,6 +941,18 @@ public class BulkFileLoader {
 			failedFolder.mkdirs();
 		}
 
+	}
+
+	private void setupLogging() throws SecurityException {
+		// set loglevel based on parameters
+		this.loglevel = ("verbose".equals(this.parameters.get("loglevel"))) ? Level.FINE : Level.INFO;
+		this.logger.setLevel(loglevel);
+		this.logger.setUseParentHandlers(false);
+		final LogFormatter formatter = new LogFormatter();
+		final ConsoleHandler handler = new ConsoleHandler();
+		handler.setFormatter(formatter);
+		handler.setLevel(loglevel);
+		this.logger.addHandler(handler);
 	}
 
 	private long startTiming() {
