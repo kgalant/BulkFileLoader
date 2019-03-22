@@ -3,6 +3,7 @@ package com.kgal.bulkfileloader;
 import java.io.File;
 import java.io.IOException;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -104,15 +105,36 @@ public class ChatterRESTFileUploader {
 		return isRunning;
 	}
 
-	public void run() throws IOException {
+	public UploadResult run() throws IOException {
 		isRunning = true;
 		
+		UploadResult result = new UploadResult();
+		
+		long totalFileSize = 0;
+		long totalFileSizeProcessed = 0;
+		long totalFileSizeErrored = 0;
+		int totalFileCount = failedItems.size();
+		int totalFileCountProcessed = 0;
+		int totalFileCountErrors = 0;
+		int fileCount = 0;
+		long startTime = System.currentTimeMillis();
+		
+		// first, tally the total size
+		
 		for (FileInventoryItem fii : failedItems) {
+			totalFileSize += fii.getSize();
+		}
+		
+		
+		for (FileInventoryItem fii : failedItems) {
+			fileCount++;
 			File fileToUpload = new File(fii.getTempFilePath());
 			if (fii.getSize() == 0) {
 				logger.log(Level.FINE, "File " + fii.getSourceFilePath() + " is size 0 - cannot be uploaded to Salesforce. Skipping");
 				fii.setSuccess(false);
 				fii.setError("Size 0");
+				totalFileCountErrors++;
+				totalFileCountProcessed++;
 				continue;
 			}
 			logger.log(Level.INFO, "Uploading file " + fii.getSourceFilePath() + " to Salesforce using REST API.");
@@ -122,6 +144,10 @@ public class ChatterRESTFileUploader {
 				logger.log(Level.INFO, "Uploading file " + fii.getSourceFilePath() + " to Salesforce failed.");
 				fii.setError("Error uploading through Chatter REST API");
 				fii.setSuccess(false);
+				totalFileCountErrors++;
+				totalFileCountProcessed++;
+				totalFileSizeErrored += fii.getSize();
+				totalFileSizeProcessed += fii.getSize();
 				continue;
 			} else {
 				// move item to success single file folder
@@ -132,17 +158,46 @@ public class ChatterRESTFileUploader {
 					logger.log(Level.INFO, "Error fetching contentDocumentID for file: " + fii.getSourceFilePath() + " File might have been uploaded, please check before retrying");
 					fii.setSuccess(false);
 					fii.setError("Uploaded, but unable to retrieve contentDocumentID from response.");
+					totalFileCountErrors++;
+					totalFileCountProcessed++;
+					totalFileSizeErrored += fii.getSize();
+					totalFileSizeProcessed += fii.getSize();
 				} else {
 				FileUtils.moveFile(fileToUpload, successFolderFile);
 				fii.setSuccess(true);
 				fii.setTempFilePath(successFolderFile.getAbsolutePath());
 				fii.setContentDocumentID(contentDocumentID);
+				totalFileCountProcessed++;
+				totalFileSizeProcessed += fii.getSize();
 				}
 			}
+			long elapsedTime = System.currentTimeMillis() - startTime;
+			double millisPerByte = ((double)totalFileSizeProcessed) / elapsedTime;
+			double bytesRemaining = totalFileSize - totalFileSizeProcessed;
+			long millisRemaining = (long)(bytesRemaining / millisPerByte); 
+			final String hmsElapsed = String.format("%02d:%02d:%02d", TimeUnit.MILLISECONDS.toHours(elapsedTime),
+					TimeUnit.MILLISECONDS.toMinutes(elapsedTime) - TimeUnit.HOURS.toMinutes(TimeUnit.MILLISECONDS.toHours(elapsedTime)),
+					TimeUnit.MILLISECONDS.toSeconds(elapsedTime)
+					- TimeUnit.MINUTES.toSeconds(TimeUnit.MILLISECONDS.toMinutes(elapsedTime)));			 
+			final String hms = String.format("%02d:%02d:%02d", TimeUnit.MILLISECONDS.toHours(millisRemaining),
+					TimeUnit.MILLISECONDS.toMinutes(millisRemaining) - TimeUnit.HOURS.toMinutes(TimeUnit.MILLISECONDS.toHours(millisRemaining)),
+					TimeUnit.MILLISECONDS.toSeconds(millisRemaining)
+					- TimeUnit.MINUTES.toSeconds(TimeUnit.MILLISECONDS.toMinutes(millisRemaining)));
+			logger.log(Level.INFO, "Status: files: " + fileCount + " / " + totalFileCount + " (" + String.format("%.2f", (float) (((float)fileCount*100)/totalFileCount)) + "%) "
+					+ " data: " + String.format("%.1f", ((float)totalFileSizeProcessed)/1024/1024) + " / " + String.format("%.1f", ((float)totalFileSize)/1024/1024) + " Mb " 
+					+ " (" + String.format("%.2f",  ((((float)totalFileSizeProcessed/1024/1024)*100)/((float)totalFileSize/1024/1024))) + "%)"
+					+ " Elapsed: " + hmsElapsed + " ETC: " + hms);
 		}
-		
+		result.setTimeElapsed(System.currentTimeMillis() - startTime);
+		result.setBytesTotal(totalFileSize);
+		result.setBytesUploaded(totalFileSizeProcessed);
+		result.setBytesErrored(totalFileSizeErrored);
+		result.setNumberOfFilesErrored(totalFileCountErrors);
+		result.setNumberOfFilesTotal(totalFileCount);
+		result.setNumberOfFilesUploaded(totalFileCountProcessed - totalFileCountErrors);	
 		
 		isRunning = false;
+		return result;
 	}
 
 	private void setupConnectionDetails() {

@@ -3,7 +3,7 @@
 	<modelVersion>4.0.0</modelVersion>
 	<groupId>com.kgal</groupId>
 	<artifactId>BulkFileLoader</artifactId>
-	<version>0.9.3</version>
+	<version>0.9.4</version>
 	<name>BulkFileLoader</name>
 	<description>App for loading files large and small into Salesforce</description>
 	<properties>

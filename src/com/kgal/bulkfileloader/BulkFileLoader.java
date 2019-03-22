@@ -879,7 +879,7 @@ public class BulkFileLoader {
 
 			checkResults(bulkConnection, myJob, batchInfos);
 
-			uploadTooLargeFiles();
+			UploadResult result = uploadTooLargeFiles();
 
 			writeResultsFile();
 
@@ -888,6 +888,21 @@ public class BulkFileLoader {
 			logger.log(Level.INFO, "Uncompressed size:" + String.format("%,d", (int)uncompressedSize) + " bytes");
 			logger.log(Level.INFO, "Compressed size:" + String.format("%,d", (int)compressedSize) + " bytes");
 			logger.log(Level.INFO, "Overall compression ratio:" + String.format("%.2f", getCompressionRatio()));
+			if (result.getBytesTotal() > 0) {
+				logger.log(Level.INFO, "Number of large files to upload:" + (result.getNumberOfFilesTotal())
+						+ ", total size: " + result.getTotalBytesInMb()
+						);
+				logger.log(Level.INFO, "Files uploaded successfully:" + result.getNumberOfFilesUploaded() 
+					+ " (" + String.format("%.2f", (float) (((float)result.getNumberOfFilesUploaded() *100)/result.getNumberOfFilesTotal())) + "%) " 
+					+ " failed: " + result.getNumberOfFilesErrored() 
+					+ " (" + String.format("%.2f", (float) (((float)result.getNumberOfFilesErrored() *100)/result.getNumberOfFilesTotal())) + "%) " 
+						);
+				logger.log(Level.INFO, "Data uploaded successfully:" + result.getBytesUploadedInMb() 
+					+ " (" + String.format("%.2f", (float) (((float) result.getBytesUploaded() *100)/result.getBytesTotal())) + "%) " 
+					+ " failed: " + result.getBytesFailedInMb() 
+					+ " (" + String.format("%.2f", (float) (((float) result.getBytesErrored() *100)/result.getBytesTotal())) + "%) " 
+						);
+			}
 			logger.log(Level.INFO, "Rate:" + String.format("%.2f", uncompressedSize/1024/1024/((System.currentTimeMillis()-startTime)/1000)) + "Mb/s");
 		} catch (Exception e) {
 			e.printStackTrace();
@@ -961,9 +976,9 @@ public class BulkFileLoader {
 		return System.currentTimeMillis();
 	}
 
-	private void uploadTooLargeFiles() throws IOException {
+	private UploadResult uploadTooLargeFiles() throws IOException {
 		ChatterRESTFileUploader uploader = new ChatterRESTFileUploader(failedFileInventoryList, successSingleFileFolder, partnerConnection, logger);
-		uploader.run();	
+		return uploader.run();	
 	}
 
 	private void writeResultsFile() throws IOException {
